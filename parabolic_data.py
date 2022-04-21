@@ -24,15 +24,21 @@ X, T = Noise().partition(a,b,dx), Noise().partition(s,t,dt) # space grid O_X and
 W = Noise().WN_space_time_many(s, t, dt, a, b, dx, k) # Create realizations of space time white noise
 
 ic = lambda x: x*(1-x) # initial condition
+IC_1 = 0.1 * Noise().initial(k, X, scaling = 2) # 2 cycle
+IC_2 = np.array([[ic(dx*i) for i in range(len(X))] for n in range(k)])
+IC = IC_1 + IC_2
+# (u0,xi)->u: IC = IC_1+IC_2 / xi->u: IC = IC_2
+# IC = np.array([[ic(dx*i) for i in range(len(X))] for n in range(k)]) # initial condition
+
 mu = lambda x: 3*x-x**3 # drift
 sigma1 = lambda x: x # multiplicative diffusive term
 sigma2 = lambda x: 1 # additive diffusive term
 
-IC = np.array([[ic(dx*i) for i in range(len(X))] for n in range(k)]) # initial condition
+
 
 # solutions to the additive equation 
-Soln_add = SPDE(BC = 'P', IC = ic, mu = mu, sigma = sigma2).Parabolic(W, T, X)
+Soln_add = SPDE(BC = 'P', IC = IC, mu = mu, sigma = sigma2).Parabolic(W, T, X)
 
 mkdir("./data/")
-np.savez("./data/parabolic_additive.npz", Soln_add = Soln_add, W = W, T = T, X = X, U0 = IC)
+np.savez("./data/parabolic_additive_randomU0.npz", Soln_add = Soln_add, W = W, T = T, X = X, U0 = IC)
 print(Soln_add.shape)
