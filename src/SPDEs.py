@@ -150,7 +150,7 @@ class SPDE():
         # u_{n+1} = u_n + (dx)^{-2} A*u_{n+1}*dt + mu(u_n)*dt + sigma(u_n)*dW_{n+1}
         # Hence u_{n+1} = (I - dt/(dx)^2 A)^{-1} (u_n + mu(u_n)*dt + sigma(u_n)*dW_{n+1})
         # Solve equations in paralel for every noise/IC simultaneosly
-        for i in range(1,len(T)):
+        for i in tqdm(range(1,len(T))):
             current = Solution[:,i-1,:] + self.mu_(Solution[:,i-1,:]) * dt + self.sigma_(Solution[:,i-1,:]) * dW[:,i,:]
             Solution[:,i,:] = np.dot(current.reshape((W.shape[0], len(X))), M)
             
