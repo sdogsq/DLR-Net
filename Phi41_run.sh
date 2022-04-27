@@ -1,0 +1,2 @@
+wandb login c46e7ccd6731858fa3ca9629d9c1863f212af2c3
+CUDA_VISIBLE_DEVICES=$1 wandb agent sdogsq/DeepRS/eo6b4619

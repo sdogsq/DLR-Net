@@ -56,14 +56,7 @@ class rsnet(nn.Module):
         self.T = T
         self.X = X
         self.RSLayer0 = ParabolicIntegrate(graph, T = T, X = X)
-        self.bn0 = nn.BatchNorm2d(len(graph))
-        self.bn1 = nn.BatchNorm2d(len(graph))
-        self.down1 = nn.Sequential(
-            nn.Linear(self.F, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1)
-        )
-        self.down2 = nn.Sequential(
+        self.down0 = nn.Sequential(
             nn.Linear(1+self.F, 32),
             nn.GELU(),
             nn.Linear(32, 1)
@@ -96,13 +89,10 @@ class rsnet(nn.Module):
         Feature_Xi: [B, T, N, F] pre-computed features only containing Xi
         '''
         R1 = self.RSLayer0(W = W, U0 = U0, XiFeature = Feature_Xi) # [B, T, N, F + 1]
-        # R1 = self.bn0(R1.permute(0, 3, 1, 2)).permute(0, 2, 3, 1) # [B, T, N, F + 1]
-        
+
         O1 = R1[..., 1:] # [B, T, N, F],  drop Xi
-        # U0 = U0 + self.down1(R1[:,-1,:,:]).squeeze() # [B, N]
-        U0 = self.down2(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
+        U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
         R1 = self.RSLayer0(W = W, U0 = U0, XiFeature = Feature_Xi, returnU0Feature = True)
-        # R1 = self.bn1(R1.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
 
         R1 = torch.cat((O1, R1), dim = 3) # [B,T,N, F + FU0]
         grid = self.get_grid(R1.shape, R1.device)
@@ -206,4 +196,3 @@ if __name__ == '__main__':
         # if (epoch == 5):
         #     profile(model, device, train_loader, optimizer, lossfn, epoch)
         #     break
-
