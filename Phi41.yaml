@@ -1,0 +1,27 @@
+program: parabolic.py
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}
+method: grid
+# metric:
+#   goal: maximize
+#   name: best/test
+# early_terminate:
+#   type: hyperband
+#   min_iter: 4
+#   eta: 2
+parameters:
+  N:
+    values: [1000, 10000]
+  k:
+    values: [0.0, 0.1]
+  epoch:
+    value: 500
+  lr:
+    value: 0.001
+  batch_size:
+    value: 32
+  weight_decay:
+    value: 0.00001
