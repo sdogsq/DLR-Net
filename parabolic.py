@@ -32,12 +32,11 @@ args = parser.parse_args()
 def parabolic_graph(data):
     # create rule with additive width 3
     R = Rule(kernel_deg = 2, noise_deg = -1.5, free_num = 3) 
-    # add multiplicative width = 1
-    R.add_component(1, {'xi':1}) 
+
     # initialize integration map I
     I = SPDE(BC = 'P', T = data['T'], X = data['X']).Integrate_Parabolic_trees 
 
-    G = Graph(integration = I, rule = R, height = 2, deg = 5) # initialize graph
+    G = Graph(integration = I, rule = R, height = 2, deg = 7.5) # initialize graph
 
     extra_deg = 2
     key = "I_c[u_0]"
