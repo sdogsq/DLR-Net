@@ -1,9 +1,14 @@
+# adapted from https://github.com/andrisger/Feature-Engineering-with-Regularity-Structures.git
+
 import numpy as np
 import pandas as pd
 import math
 from tqdm import tqdm
 from time import time
 import matplotlib.pyplot as plt
+from IPython import embed
+import torch
+
 
 class SPDE():
     
@@ -57,6 +62,42 @@ class SPDE():
         if flatten:
             return a.flatten()
         return a
+
+    def discrete_diff_2d(self, vec, N, axis, f = None, flatten = True, higher = True):
+        a = vec.copy()
+        if len(a.shape) == 1:
+            a = a.reshape(len(vec)//N, N)
+        if axis == 1:
+            if f is None:
+                if higher: # central approximation of a dervative
+                    a[:,:-1,:] = (np.roll(a[:,:-1,:], -1, axis = 1) - np.roll(a[:,:-1,:], 1, axis = 1))/2
+                else:
+                    a[:,:-1,:] = a[:,:-1,:] - np.roll(a[:,:-1,:], 1, axis = 1)
+            else:
+                # if a finction f given output d f(vec) / dx instead of d(vec)/dx
+                if higher:
+                    a[:,:-1,:] = (self.vectorized(f, np.roll(a[:,:-1,:], -1, axis = 1)) - self.vectorized(f, np.roll(a[:,:-1,:], 1, axis = 1)))/2
+                else:
+                    a[:,:-1,:] = self.vectorized(f, a[:,:-1,:]) - self.vectorized(f, np.roll(a[:,:-1,:], 1, axis = 1))
+            a[:,-1,:] = a[:,0,:] # enforce periodic boundary condions
+            if flatten:
+                return a.flatten()
+        if axis == 2:
+            if f is None:
+                if higher: # central approximation of a dervative
+                    a[:,:,:-1] = (np.roll(a[:,:,:-1], -1, axis = 2) - np.roll(a[:,:,:-1], 1, axis = 2))/2
+                else:
+                    a[:,:,:-1] = a[:,:,:-1] - np.roll(a[:,:,:-1], 1, axis = 2)
+            else:
+                # if a finction f given output d f(vec) / dx instead of d(vec)/dx
+                if higher:
+                    a[:,:,:-1] = (self.vectorized(f, np.roll(a[:,:,:-1], -1, axis = 2)) - self.vectorized(f, np.roll(a[:,:,:-1], 1, axis = 2)))/2
+                else:
+                    a[:,:,:-1] = self.vectorized(f, a[:,:,:-1]) - self.vectorized(f, np.roll(a[:,:,:-1], 1, axis = 2))
+            a[:,:,-1] = a[:,:,0] # enforce periodic boundary condions
+            if flatten:
+                return a.flatten()
+        return a
     
     def initialization(self, W, T, X, diff = True):
         
@@ -72,6 +113,22 @@ class SPDE():
             # Outputs W*dt
             dW = W*dt
         
+        return dW, dx, dt
+
+    def initialization_2d(self, W, T, X, diff = True):
+        
+        dx, dt = X[1,0]-X[0,0], T[1]-T[0]
+        # If only one noise given, reshape it to a 4d array with one noise.
+        if len(W.shape) == 3:
+            W.reshape((1,W.shape[0], W.shape[1]))
+        if diff:
+            # Outups dW
+            dW = np.zeros(W.shape)
+            dW[:,1:,:,:] = np.diff(W, axis = 1)
+        else:
+            # Outputs W*dt
+            dW = W*dt
+
         return dW, dx, dt
         
         
@@ -91,6 +148,22 @@ class SPDE():
         
         # Matrix approximation of eps * \Delta*dt
         return self.eps*dt * A / (dx ** 2)
+    
+    def Laplace_2d(self, arr, dx, dt):
+        if not isinstance(arr, np.ndarray):
+            return 0
+        out = np.zeros(arr.shape)
+        out[:,1:-1,:] += np.diff(arr, 2, axis=1)
+        out[:,:,1:-1] += np.diff(arr, 2, axis=2)
+                
+        if self.BC =='P':
+            out[:,0,1:-1] = arr[:,1,1:-1] + arr[:,-1,1:-1] + arr[:,0,0:-2] + arr[:,0,2:] - 4*arr[:,0,1:-1]
+            out[:,-1,1:-1] = arr[:,0,1:-1] + arr[:,-2,1:-1] + arr[:,-1,0:-2] + arr[:,-1,2:] - 4*arr[:,-1,1:-1]
+            out[:,1:-1,0] = arr[:,1:-1,1] + arr[:,1:-1,-1] + arr[:,0:-2,0] + arr[:,2:,0] - 4*arr[:,1:-1,0]
+            out[:,1:-1,-1] = arr[:,1:-1,0] + arr[:,1:-1,-2] + arr[:,0:-2,-1] + arr[:,2:,-1] - 4*arr[:,1:-1,-1]
+            
+        return out*dt/dx**2
+            
     
     def KdV_Matrix(self, N, dt, dx, inverse = True): 
         # Matrix approximating or (Id-eps*\partial_{xxx}*dt)^{-1} or eps*\partial_{xxx}*dt for potential application 
@@ -158,9 +231,43 @@ class SPDE():
         # need to reshape it to matrix of the shape (W.shape[0], len(X)) and multiply on the right by the M^T (transpose).
         # M*(current.reshape(...)) does not give the correct value.
         
+        return Solution
+
+    def Parabolic_2d(self, W, T = None, X = None, diff = True):  
+        if T is None: T = self.T
+        if X is None: X = self.X
+        
+        # Extract specae-time increments and dW
+        dW, dx, dt = self.initialization_2d(W, T, X, diff)
+
+        Solution = np.zeros(shape = W.shape)
+        
+        # define initial conditions
+        if type(self.IC) is np.ndarray:
+            if self.IC.shape == (W.shape[0], X.shape[0], X.shape[1]): #if initial conditions are given
+                IC = self.IC
+            else:
+                IC = np.array([self.IC for _ in range(W.shape[0])]) # one initial condition
+        else:
+            initial = self.vectorized(self.IC, X) # setting initial condition for one solution
+            IC = np.array([initial for _ in range(W.shape[0])]) #for every solution
+        
+        # Initialize
+        Solution[:,0,:,:] = IC
+        
+        # Finite difference method.
+        # u_{n+1} = u_n + mu(u_n)*dt + sigma(u_n)*dW_{n} + (dx)^{-2} A*u_{n}*dt 
+        # Solve equations in paralel for every noise/IC simultaneosly
+        for i in tqdm(range(1,len(T))):
+            L = self.Laplace_2d(Solution[:,i-1,:,:], dx, dt)
+            Solution[:,i,:,:] = Solution[:,i-1,:,:] + self.mu_(Solution[:,i-1,:,:]) * dt + self.sigma_(Solution[:,i-1,:,:]) * dW[:,i,:,:] + self.eps*L
+            
+        # Because Solution.iloc[i-1] and thus current is a vector of length len(noises)*len(X)
+        # need to reshape it to matrix of the shape (W.shape[0], len(X)) and multiply on the right by the M^T (transpose).
+        # M*(current.reshape(...)) does not give the correct value.
         
         return Solution
-    
+          
     # Solves 1D stochasrtic Wave equation, given numpy array of several noises and space time domain
     def Wave(self, W, T = None, X = None, diff = True):
         if T is None: T = self.T
@@ -175,11 +282,27 @@ class SPDE():
         Solution, Solution_t = np.zeros(shape = W.shape), np.zeros(shape = W.shape)
         
         # Define fixed initial conditions for every realizarion of the noise 
-        initial, initial_t = self.vectorized(self.IC, X), self.vectorized(self.IC_t, X)
+        if type(self.IC) is np.ndarray:
+            if self.IC.shape == (W.shape[0], len(X)): #if initial conditions are given
+                initial = self.IC
+            else:
+                initial = np.array([self.IC for _ in range(W.shape[0])]) # one initial condition
+        else:
+            initial_ = self.vectorized(self.IC, X) # setting initial condition for one solution
+            initial = np.array([initial_ for _ in range(W.shape[0])]) #for every solution
+        
+        if type(self.IC_t) is np.ndarray:
+            if self.IC_t.shape == (W.shape[0], len(X)): #if initial conditions are given
+                initial_t = self.IC_t
+            else:
+                initial_t = np.array([self.IC_t for _ in range(W.shape[0])]) # one initial condition
+        else:
+            initial_t_ = self.vectorized(self.IC_t, X) # setting initial condition for one solution
+            initial_t = np.array([initial_t_ for _ in range(W.shape[0])]) #for every solution
 
         # Initialize
-        Solution[:,0,:] = np.array([initial for _ in range(W.shape[0])])
-        Solution_t[:,0,:] = np.array([initial_t for _ in range(W.shape[0])])
+        Solution[:,0,:] = initial
+        Solution_t[:,0,:] = initial_t
         
         # Finite difference method.
         # Solve wave equation as a system for (Solution, Solition_t)
@@ -209,9 +332,9 @@ class SPDE():
             M = self.Parabolic_Matrix(len(X)-1, dt, dx).T #M = (I-\Delta*dt)^{-1}
 
         Solution = np.zeros(shape = W.shape)
-        
+
         # define initial conditions
-    
+
         if type(self.IC) is np.ndarray:
             if self.IC.shape == (W.shape[0], len(X)): #if initial conditions are given
                 IC = self.IC
@@ -233,7 +356,7 @@ class SPDE():
             Solution[:,i,:] = np.dot(current.reshape((W.shape[0], len(X))), M)
             
         return Solution
-    
+  
     # Function that integrates trees required for the model. It applies operator I in paralel to many functions
     # where I[f] is a solution to (\partial_t - eps*\Delta) I[f] = f with zero IC.
     
@@ -266,6 +389,35 @@ class SPDE():
                 else:
                     # centralised differentiation
                     Jtau["I'[{}]".format(t)] = self.discrete_diff(integrated[i], len(self.X), flatten = False, higher = True)/dx
+        return Jtau
+
+    def Integrate_Parabolic_trees_2d(self, tau, done = {}, exceptions = {}, derivative = False):
+    
+        #extract the trees from dictionary which are not purely polyniomials and were not already integrated
+        trees = [tree for tree in tau.keys() if 'I[{}]'.format(tree) not in done and 'I[{}]'.format(tree) not in exceptions] 
+
+        dt, dx = self.T[1]-self.T[0], self.X[1,0]-self.X[0,0]
+        taus = np.array([tau[t] for t in trees])
+
+        integrated = np.zeros(shape = (len(trees), len(self.T), self.X.shape[0], self.X.shape[1]))
+        
+        # Finite difference method.
+        # Compute M*(integrated[i-1]+taus[i]). M^T (transpose) and reshaping for the same reason as in Parabolic_many
+        for i in range(1,len(self.T)): 
+            integrated[:,i,:,:] = (integrated[:,i-1,:,:] + self.eps * self.Laplace_2d(integrated[:,i-1,:,:], dx, dt) + taus[:,i-1,:,:] * dt).reshape((len(trees), self.X.shape[0], self.X.shape[1]))
+        
+        Jtau = {}
+        for i, t in enumerate(trees): #update dictionary and return integrated taus.
+            Jtau['I[{}]'.format(t)] = integrated[i]
+            if derivative and "I1[{}]".format(t) not in exceptions and "I2[{}]".format(t) not in exceptions and t[1] == "[":
+                # If derivative is true include also functions of the form \partial_x I[f] that are denoted as I'[f]
+                if derivative == 1 or derivative is True:
+                    Jtau["I1[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 1, flatten = False, higher = False)/dx
+                    Jtau["I2[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 2, flatten = False, higher = False)/dx
+                else:
+                    # centralised differentiation
+                    Jtau["I1[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 1, flatten = False, higher = True)/dx
+                    Jtau["I2[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 2, flatten = False, higher = True)/dx
         return Jtau
     
     # Function that integrates trees required for the model. It applies operator I in paralel to many functions
@@ -306,87 +458,7 @@ class SPDE():
         return Jtau
     
     #To finish
-    def Integrate_Parabolic_trees_2d(self, tau, done = {}, exceptions = {}, derivative = False):
-    
-        #extract the trees from dictionary which are not purely polyniomials and were not already integrated
-        trees = [tree for tree in tau.keys() if 'I[{}]'.format(tree) not in done and 'I[{}]'.format(tree) not in exceptions] 
-
-        dt, dx = self.T[1]-self.T[0], self.X[1,0]-self.X[0,0]
-        taus = np.array([tau[t] for t in trees])
-
-        integrated = np.zeros(shape = (len(trees), len(self.T), self.X.shape[0], self.X.shape[1]))
         
-        # Finite difference method.
-        # Compute M*(integrated[i-1]+taus[i]). M^T (transpose) and reshaping for the same reason as in Parabolic_many
-        for i in range(1,len(self.T)): 
-            integrated[:,i,:,:] = (integrated[:,i-1,:,:] + self.eps * self.Laplace_2d(integrated[:,i-1,:,:], dx, dt) + taus[:,i-1,:,:] * dt).reshape((len(trees), self.X.shape[0], self.X.shape[1]))
-        
-        Jtau = {}
-        for i, t in enumerate(trees): #update dictionary and return integrated taus.
-            Jtau['I[{}]'.format(t)] = integrated[i]
-            if derivative and "I1[{}]".format(t) not in exceptions and "I2[{}]".format(t) not in exceptions and t[1] == "[":
-                # If derivative is true include also functions of the form \partial_x I[f] that are denoted as I'[f]
-                if derivative == 1 or derivative is True:
-                    Jtau["I1[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 1, flatten = False, higher = False)/dx
-                    Jtau["I2[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 2, flatten = False, higher = False)/dx
-                else:
-                    # centralised differentiation
-                    Jtau["I1[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 1, flatten = False, higher = True)/dx
-                    Jtau["I2[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 2, flatten = False, higher = True)/dx
-        return Jtau
-
-    def Laplace_2d(self, arr, dx, dt):
-        if not isinstance(arr, np.ndarray):
-            return 0
-        out = np.zeros(arr.shape)
-        out[:,1:-1,:] += np.diff(arr, 2, axis=1)
-        out[:,:,1:-1] += np.diff(arr, 2, axis=2)
-                
-        if self.BC =='P':
-            out[:,0,1:-1] = arr[:,1,1:-1] + arr[:,-1,1:-1] + arr[:,0,0:-2] + arr[:,0,2:] - 4*arr[:,0,1:-1]
-            out[:,-1,1:-1] = arr[:,0,1:-1] + arr[:,-2,1:-1] + arr[:,-1,0:-2] + arr[:,-1,2:] - 4*arr[:,-1,1:-1]
-            out[:,1:-1,0] = arr[:,1:-1,1] + arr[:,1:-1,-1] + arr[:,0:-2,0] + arr[:,2:,0] - 4*arr[:,1:-1,0]
-            out[:,1:-1,-1] = arr[:,1:-1,0] + arr[:,1:-1,-2] + arr[:,0:-2,-1] + arr[:,2:,-1] - 4*arr[:,1:-1,-1]
-            
-        return out*dt/dx**2
-
-
-    def discrete_diff_2d(self, vec, N, axis, f = None, flatten = True, higher = True):
-        a = vec.copy()
-        if len(a.shape) == 1:
-            a = a.reshape(len(vec)//N, N)
-        if axis == 1:
-            if f is None:
-                if higher: # central approximation of a dervative
-                    a[:,:-1,:] = (np.roll(a[:,:-1,:], -1, axis = 1) - np.roll(a[:,:-1,:], 1, axis = 1))/2
-                else:
-                    a[:,:-1,:] = a[:,:-1,:] - np.roll(a[:,:-1,:], 1, axis = 1)
-            else:
-                # if a finction f given output d f(vec) / dx instead of d(vec)/dx
-                if higher:
-                    a[:,:-1,:] = (self.vectorized(f, np.roll(a[:,:-1,:], -1, axis = 1)) - self.vectorized(f, np.roll(a[:,:-1,:], 1, axis = 1)))/2
-                else:
-                    a[:,:-1,:] = self.vectorized(f, a[:,:-1,:]) - self.vectorized(f, np.roll(a[:,:-1,:], 1, axis = 1))
-            a[:,-1,:] = a[:,0,:] # enforce periodic boundary condions
-            if flatten:
-                return a.flatten()
-        if axis == 2:
-            if f is None:
-                if higher: # central approximation of a dervative
-                    a[:,:,:-1] = (np.roll(a[:,:,:-1], -1, axis = 2) - np.roll(a[:,:,:-1], 1, axis = 2))/2
-                else:
-                    a[:,:,:-1] = a[:,:,:-1] - np.roll(a[:,:,:-1], 1, axis = 2)
-            else:
-                # if a finction f given output d f(vec) / dx instead of d(vec)/dx
-                if higher:
-                    a[:,:,:-1] = (self.vectorized(f, np.roll(a[:,:,:-1], -1, axis = 2)) - self.vectorized(f, np.roll(a[:,:,:-1], 1, axis = 2)))/2
-                else:
-                    a[:,:,:-1] = self.vectorized(f, a[:,:,:-1]) - self.vectorized(f, np.roll(a[:,:,:-1], 1, axis = 2))
-            a[:,:,-1] = a[:,:,0] # enforce periodic boundary condions
-            if flatten:
-                return a.flatten()
-        return a
-
     def save(self, Solution, name):
         # create a multilevel dataframe and save as a csv file
         columns = pd.MultiIndex.from_product([['S'+str(i+1) for i in range(Solution.shape[0])], self.X])
@@ -398,3 +470,5 @@ class SPDE():
         Data.columns = pd.MultiIndex.from_product([['S'+str(i+1) for i in range(Data.columns.levshape[0])], np.asarray(Data['S1'].columns, dtype = np.float16)])
         
         return Data
+
+# %%

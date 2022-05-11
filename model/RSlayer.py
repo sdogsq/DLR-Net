@@ -82,10 +82,10 @@ class ParabolicIntegrate(nn.Module):
 
         return Ret # [B, T, N]
     
-    def forward(self, W = None, U0 = None, XiFeature = None, returnU0Feature = False, diff = True):
+    def forward(self, W = None, Latent = None, XiFeature = None, returnU0Feature = False, diff = True):
         '''
             W : [B, T, N]
-            U0 : [B, N]
+            Latent : [B, T, N]
             XiFeature : [B, T, N, F]
             diff : bool
 
@@ -108,8 +108,8 @@ class ParabolicIntegrate(nn.Module):
             raise "empty input"
 
         firiter = 1
-        if U0 is not None:
-            integrated.append(self.I_c(U0))
+        if Latent is not None:
+            integrated.append(Latent)
             firiter = 2
 
         for k, dic in enumerate(self.graph[firiter:],firiter):
@@ -118,7 +118,7 @@ class ParabolicIntegrate(nn.Module):
                 continue
 
             # compute the integral with u_0
-            B = len(W) if W is not None else len(U0)
+            B = len(W) if W is not None else len(Latent)
             tmp = torch.ones(B, self.T, self.N,  **factory_kwargs) # [B, T, N]
             for it, p in dic.items():
                 if (p == 1):

@@ -1,6 +1,7 @@
 import torch
 from functools import reduce
 from model.RSlayer import ParabolicIntegrate
+from model.RSlayer_2d import ParabolicIntegrate_2d
 from torch.utils.data import TensorDataset, DataLoader
 
 def cacheXiFeature(graph, T, X, W, device, batch_size = 100):
@@ -8,6 +9,19 @@ def cacheXiFeature(graph, T, X, W, device, batch_size = 100):
     return features only containing Xi
     '''
     InteLayer = ParabolicIntegrate(graph, T = T, X = X).to(device)
+    WSet = TensorDataset(W)
+    WLoader = DataLoader(WSet, batch_size=batch_size, shuffle=False)
+    XiFeature = []
+    for (W, ) in WLoader:
+        XiFeature.append(InteLayer(W = W.to(device)).to('cpu'))
+    XiFeature = torch.cat(XiFeature, dim = 0)
+    return XiFeature
+    
+def cacheXiFeature_2d(graph, T, X, Y, W, eps, device, batch_size = 100):
+    '''
+    return features only containing Xi
+    '''
+    InteLayer = ParabolicIntegrate_2d(graph, T = T, X = X, Y = Y, eps = eps).to(device)
     WSet = TensorDataset(W)
     WLoader = DataLoader(WSet, batch_size=batch_size, shuffle=False)
     XiFeature = []

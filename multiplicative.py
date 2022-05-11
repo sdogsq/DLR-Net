@@ -53,13 +53,18 @@ class rsnet(nn.Module):
         self.graph = graph
         self.F = len(graph) - 1
         self.FU0 = len([key for key in graph.keys() if 'u_0' in key])
-        self.T = T
-        self.X = X
+        self.T = len(T)
+        self.X = len(X)
         self.RSLayer0 = ParabolicIntegrate(graph, T = T, X = X)
         self.down0 = nn.Sequential(
-            nn.Linear(1+self.F, 32),
+            nn.Linear(self.F, 32),
             nn.GELU(),
             nn.Linear(32, 1)
+        )
+        self.down1 = nn.Sequential(
+            nn.Conv1d(self.T * self.F, 32 * self.T, kernel_size=1, groups = self.T),
+            nn.GELU(),
+            nn.Conv1d(32 * self.T, self.T, kernel_size = 1, groups = self.T)
         )
         self.L = 4
         self.padding = 6 
@@ -88,11 +93,15 @@ class rsnet(nn.Module):
         W: [B, T, N] realizations of white noise
         Feature_Xi: [B, T, N, F] pre-computed features only containing Xi
         '''
-        R1 = self.RSLayer0(W = W, U0 = U0, XiFeature = Feature_Xi) # [B, T, N, F + 1]
+        U0 = self.RSLayer0.I_c(U0) # [B, T, N]
+
+        R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi) # [B, T, N, F + 1]
 
         O1 = R1[..., 1:] # [B, T, N, F],  drop Xi
-        U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
-        R1 = self.RSLayer0(W = W, U0 = U0, XiFeature = Feature_Xi, returnU0Feature = True)
+        # U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
+        U0 = self.down0(O1).squeeze() # [B, T, N]
+        # U0 = self.down1(O1.permute(0, 2, 1, 3).reshape(-1, self.T * self.F, 1)).reshape(-1,self.T, self.X) # [B, T, N]
+        R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnU0Feature = True)
 
         R1 = torch.cat((O1, R1), dim = 3) # [B,T,N, F + FU0]
         grid = self.get_grid(R1.shape, R1.device)
