@@ -12,7 +12,7 @@ from src.Rule import Rule
 from src.SPDEs import SPDE
 from src.Graph import Graph
 from model.RSlayer_2d import ParabolicIntegrate_2d, FNO_layer
-from utils import LpLoss, cacheXiFeature_2d
+from utils import LpLoss, cacheXiFeature_2d, MatReader
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-N', '--N', type=int, default=1000, metavar='N',
@@ -31,7 +31,7 @@ parser.add_argument('--weight_decay', type=float, default=1e-5, metavar='N',
                     help='weight decay')
 args = parser.parse_args()
 
-def NS_graph(data):
+def NS_graph(data, xi):
     # create rule with additive width 2
     R = Rule(kernel_deg = 2, noise_deg = -2, free_num = 2) 
 
@@ -43,8 +43,8 @@ def NS_graph(data):
     extra_deg = 2
     key = "I_c[u_0]"
 
-    graph = G.create_model_graph_2d(data['W'][0], data['X'],
-                                 extra_planted = {key: data['W'][0]},
+    graph = G.create_model_graph_2d(xi[0], data['X'],
+                                 extra_planted = {key: xi[0]},
                                  extra_deg = {key : extra_deg})
     # delete unused derivative features
     used = set().union(*[{IZ for IZ in graph[key].keys()} for key in graph.keys() if key[:2] == 'I['])
@@ -111,11 +111,16 @@ class rsnet_2d(nn.Module):
         self.L = 4
         self.padding = 6
         # modes1, modes2, width = 12, 12, 32
-        modes1, modes2, modes3, width = 8, 8, 8, 20
+        modes1, modes2, modes3, width = 16, 16, 10, 8 #8, 8, 8, 20
         self.net = [FNO_layer(modes1, modes2, modes3, width) for i in range(self.L-1)]
         self.net += [FNO_layer(modes1, modes2, modes3, width, last=True)]
         self.net = nn.Sequential(*self.net)
-        self.fc0 = nn.Linear(self.F + self.FU0 +  3, width)
+        self.fc0 = nn.Linear(self.F +   3, width)
+        self.decoder2 = nn.Sequential(
+            nn.Conv1d(self.T * self.F, 32 * self.T, kernel_size=1, groups = self.T),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(32 * self.T, self.T, kernel_size = 1, groups = self.T)
+        )
         self.decoder = nn.Sequential(
             nn.Linear(width, 128),
             nn.ReLU(inplace=True),
@@ -131,14 +136,6 @@ class rsnet_2d(nn.Module):
         gridz = torch.tensor(np.linspace(0, 1, size_z), dtype=torch.float)
         gridz = gridz.reshape(1, 1, 1, size_z, 1).repeat([batchsize, size_x, size_y, 1, 1])
         return torch.cat((gridx, gridy, gridz), dim=-1).to(device)
-        
-    # def get_grid(self, shape, device):
-    #     batchsize, size_x, size_y = shape[0], shape[1], shape[2]
-    #     gridx = torch.tensor(np.linspace(0, 1, size_x), dtype=torch.float)
-    #     gridx = gridx.reshape(1, size_x, 1, 1).repeat([batchsize, 1, size_y, 1])
-    #     gridy = torch.tensor(np.linspace(0, 1, size_y), dtype=torch.float)
-    #     gridy = gridy.reshape(1, 1, size_y, 1).repeat([batchsize, size_x, 1, 1])
-    #     return torch.cat((gridx, gridy), dim=-1).to(device)
 
     def forward(self, U0, W, Feature_Xi = None):
         '''
@@ -149,15 +146,16 @@ class rsnet_2d(nn.Module):
         U0 = self.RSLayer0.I_c(U0) # [B, T, X, Y]
 
         R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi) # [B, T, X, Y, F + 1]
-        # R1 = R1[..., 1:] # [B, T, X, Y, F],  drop Xi
-        # print("A")
-        O1 = R1[..., 1:] # [B, T, X, Y, F],  drop Xi
-        # U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
-        U0 = self.down0(O1).squeeze() # [B, T, X, Y]
-        # U0 = self.down1(O1.permute(0, 2, 3, 1, 4).reshape(-1, self.T * self.F, 1)).reshape(-1,self.T, self.X, self.Y) # [B, T, X, Y]
-        R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnU0Feature = True)
-        # print("B")
-        R1 = torch.cat((O1, R1), dim = -1)  # [B, T, X, Y, F + FU0]
+        R1 = R1[..., 1:] # [B, T, X, Y, F],  drop Xi
+        # # print("A")
+        # # O1 = R1[..., 1:] # [B, T, X, Y, F],  drop Xi
+        # O1 = R1
+        # # U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
+        # U0 = self.down0(O1).squeeze() # [B, T, X, Y]
+        # # U0 = self.down1(O1.permute(0, 2, 3, 1, 4).reshape(-1, self.T * self.F, 1)).reshape(-1,self.T, self.X, self.Y) # [B, T, X, Y]
+        # R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnU0Feature = True)
+        # # print("B")
+        # R1 = torch.cat((O1, R1), dim = -1)  # [B, T, X, Y, F + FU0]
         grid = self.get_grid(R1.shape, R1.device)
         R1 = torch.cat((R1, grid), dim=-1) # [B, T, X, Y, F + FU0 + 3]
         R1 = self.fc0(R1)
@@ -171,21 +169,52 @@ class rsnet_2d(nn.Module):
         # print("D")
         return R1.squeeze() # [B, T, X, Y]
 
+def dataloader_nspde_2d(u, xi=None, ntrain=1000, ntest=200, T=51, sub_t=1, sub_x=4, dataset=None):
+
+    if xi is None:
+        print('There is no known forcing')
+
+    # if dataset=='sns':
+    #     T, sub_t, sub_x = 100, 1, 4
+
+    u0_train = u[:ntrain, ::sub_x, ::sub_x, 0]#.unsqueeze(1)
+    u_train = u[:ntrain, ::sub_x, ::sub_x, :T:sub_t]
+
+    if xi is not None:
+        xi_train = xi[:ntrain, ::sub_x, ::sub_x, 0:T:sub_t]#.unsqueeze(1)
+    else:
+        xi_train = torch.zeros_like(u_train)
+
+    u0_test = u[-ntest:, ::sub_x, ::sub_x, 0]#.unsqueeze(1)
+    u_test = u[-ntest:, ::sub_x, ::sub_x, 0:T:sub_t]
+
+    if xi is not None:
+        xi_test = xi[-ntest:, ::sub_x, ::sub_x, 0:T:sub_t]#.unsqueeze(1)
+    else:
+        xi_test = torch.zeros_like(u_test)
+
+    return (xi_train.transpose(0,3,1,2), xi_test.transpose(0,3,1,2),
+            u0_train, u0_test,
+            u_train.transpose(0,3,1,2), u_test.transpose(0,3,1,2))\
 
 if __name__ == '__main__':
-    data = np.load(f"./data/NS.npz")
-    # Solution = Soln, W = forcing, T = time.numpy(), X = X, Y = Y, U0 = IC
-    train_W, test_W, train_U0, test_U0, train_Y, test_Y = train_test_split(data['W'],
-                                                                           data['U0'],
-                                                                           data['Solution'],
-                                                                           train_size=args.N, 
-                                                                           shuffle=False)
+    reader = MatReader('./data/NS_xi.mat', to_torch = False)
+    data = {}
+    data['T'] = reader.read_field('t').squeeze()[0:1000:10].squeeze()
+    data['Solution'] = reader.read_field('sol')
+    data['W'] = reader.read_field('forcing')
+    spoints = np.linspace(0, 1, 16)
+    data['Y'], data['X'] = np.meshgrid(spoints, spoints)
+
+    train_W, test_W, train_U0, test_U0, train_Y, test_Y = dataloader_nspde_2d(
+                                                            u=data['Solution'], xi=data['W'], ntrain=1000,
+                                                            ntest=200, T=100, sub_t = 1, sub_x=4, dataset='sns')
 
     print(f"train_W: {train_W.shape}, train_U0: {train_U0.shape}, train_Y: {train_Y.shape}")
     print(f"test_W: {test_W.shape}, test_U0: {test_U0.shape}, test_Y: {test_Y.shape}")
     print(f"data['T']: {data['T'].shape}, data['X']: {data['X'].shape}, data['Y']: {data['Y'].shape}")
-
-    graph = NS_graph(data)
+    # exit(0)
+    graph = NS_graph(data, train_W)
     for key, item in graph.items():
         print(key, item)
     print(len(graph))
@@ -245,10 +274,10 @@ if __name__ == '__main__':
 
         trainTime += tok - tik
 
-        tik = time.time()
-        inferenceLoss = Inference(model, device, test_loader, lossfn)
-        tok = time.time()
-        inferenceTime += tok - tik
+        # tik = time.time()
+        # inferenceLoss = Inference(model, device, test_loader, lossfn)
+        # tok = time.time()
+        # inferenceTime += tok - tik
 
         wandb.log({"Train Loss": trainLoss, "Test Loss": testLoss})
         print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \tTime per Epoch: {:.3f} \tInference Time per Epoch: {:.3f}'\

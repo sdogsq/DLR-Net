@@ -22,24 +22,34 @@ class ParabolicIntegrate_2d(nn.Module):
             self.T = len(self.T_points) # number of time points
 
             self.dt, self.dx = self.T_points[1] - self.T_points[0], self.X_points[1] - self.X_points[0]  # for equaly spaced points
+            filter = torch.tensor([[[[0.,1.,0.],[1.,-4.,1.],[0.,1.,0.]]]], **self.factory_kwargs) ## kernel of 2D Laplace operator
+            self.register_buffer("filter", filter)
+
+            filterI = torch.tensor([[[[0.,0.,0.],[0.,1.,0.],[0.,0.,0.]]]], **self.factory_kwargs) + \
+                      self.eps * torch.tensor([[[[0.,1.,0.],[1.,-4.,1.],[0.,1.,0.]]]], **self.factory_kwargs)*self.dt/self.dx**2 ## kernel of 2D Laplace operator
+            self.register_buffer("filterI", filterI)
 
     def Laplace_2d(self, arr):
-        if not isinstance(arr, torch.Tensor):
-            raise TypeError('arr must be a torch tensor')
+        return F.conv2d(F.pad(arr.unsqueeze(1), (1,1,1,1), mode = 'circular'), self.filter).squeeze(1)*self.dt/self.dx**2 # ~ 30s
         out = torch.zeros(arr.shape, dtype = arr.dtype, device = arr.device)
         out[:,1:-1,:] += torch.diff(torch.diff(arr, axis=1), axis = 1)
         out[:,:,1:-1] += torch.diff(torch.diff(arr, axis=2), axis = 2)
-        if torch.isinf(out).any():
-            print(arr)
-            raise ValueError('tmp is nan')
+        # if torch.isinf(out).any():
+        #     print(arr)
+        #     raise ValueError('tmp is nan')
         if self.BC =='P':
             out[:,0,1:-1] = arr[:,1,1:-1] + arr[:,-1,1:-1] + arr[:,0,0:-2] + arr[:,0,2:] - 4*arr[:,0,1:-1]
             out[:,-1,1:-1] = arr[:,0,1:-1] + arr[:,-2,1:-1] + arr[:,-1,0:-2] + arr[:,-1,2:] - 4*arr[:,-1,1:-1]
             out[:,1:-1,0] = arr[:,1:-1,1] + arr[:,1:-1,-1] + arr[:,0:-2,0] + arr[:,2:,0] - 4*arr[:,1:-1,0]
             out[:,1:-1,-1] = arr[:,1:-1,0] + arr[:,1:-1,-2] + arr[:,0:-2,-1] + arr[:,2:,-1] - 4*arr[:,1:-1,-1]
-        if torch.isinf(out).any():
-            raise ValueError('tmp is nan')
-        return out*self.dt/self.dx**2
+        # if torch.isinf(out).any():
+        #     raise ValueError('tmp is nan')
+        # print(torch.max(torch.abs(arr)),torch.max(torch.abs(out-F.conv2d(F.pad(arr.unsqueeze(1), (1,1,1,1), mode = 'circular'), self.filter).squeeze(1) )))
+
+        return out*self.dt/self.dx**2 # ~ 45s
+
+    def Laplace_I_2d(self, arr):
+        return F.conv2d(F.pad(arr.unsqueeze(1), (1,1,1,1), mode = 'circular'), self.filterI).squeeze(1) # ~ 30s
 
     def I_c(self, U0):
         '''
@@ -55,7 +65,11 @@ class ParabolicIntegrate_2d(nn.Module):
         # u_{n+1} = u_n + mu(u_n)*dt + sigma(u_n)*dW_{n} + (dx)^{-2} A*u_{n}*dt 
         # mu = sigma = 0 for solving I_c[u_0]
         for i in range(1, self.T):
-            Solution[:,i,:,:] = Solution[:,i-1,:,:] + self.eps * self.Laplace_2d(Solution[:,i-1,:,:])
+            Solution[:,i,:,:] = self.Laplace_I_2d(Solution[:,i-1,:,:])
+            # tmp = self.Laplace_I_2d(Solution[:,i-1,:,:])
+            # Solution[:,i,:,:] = Solution[:,i-1,:,:] + self.eps * self.Laplace_2d(Solution[:,i-1,:,:])
+            # print(torch.max(torch.abs(Solution[:,i,:,:])),torch.max(torch.abs(Solution[:,i,:,:] - tmp)), torch.norm(Solution[:,i,:,:] - tmp))
+
 
         return Solution
 
@@ -83,8 +97,8 @@ class ParabolicIntegrate_2d(nn.Module):
             else:
                 dW = W*self.dt
             integrated.append(dW)
-            if torch.isinf(integrated[-1]).any():
-                raise ValueError('dW is nan')
+            # if torch.isinf(integrated[-1]).any():
+            #     raise ValueError('dW is nan')
         else:
             raise "empty itorchut"
 
@@ -94,6 +108,8 @@ class ParabolicIntegrate_2d(nn.Module):
         if Latent is not None:
             integrated.append(Latent)
             firiter = 2
+
+        B = len(W) if W is not None else len(Latent) # current batchsize
 
         for k, dic in enumerate(self.graph[firiter:],firiter):
             if (self.only_xi[k] and XiFeature is not None): # have cached XiFeature
@@ -105,7 +121,7 @@ class ParabolicIntegrate_2d(nn.Module):
                 continue
             
             # compute the integral with u_0
-            B = len(W) if W is not None else len(Latent)
+            
             tmp = torch.ones(B, self.T, self.X, self.Y,  **factory_kwargs) # [B, T, X, Y]
             for it, p in dic.items():
                 if (p == 1):
@@ -113,19 +129,23 @@ class ParabolicIntegrate_2d(nn.Module):
                 else:
                     tmp = tmp * torch.pow(integrated[it], p)
 
-            if torch.isinf(tmp).any():
-                raise ValueError('tmp is nan')
-            res = [torch.zeros(B, self.X, self.Y, **factory_kwargs)] # T * [B, X, Y]
+            tmp = tmp * self.dt
+            tmp[:,0,:,:] = 0
             for i in range(1,self.T):
-                res.append(res[-1] + self.eps * self.Laplace_2d(res[-1]) + tmp[:,i-1,:,:] * self.dt)
-                if torch.isinf(res[-1]).any():
-                    raise ValueError('res is nan')
+                tmp[:,i,:,:] = self.Laplace_I_2d(tmp[:,i-1,:,:]) + tmp[:,i,:,:]
+            integrated.append(tmp)
+            # res = [torch.zeros(B, self.X, self.Y, **factory_kwargs)] # T * [B, X, Y]
+            # for i in range(1,self.T):
+            #     res.append(self.Laplace_I_2d(res[-1]) + tmp[:,i-1,:,:] * self.dt)
+                # res.append(res[-1] + self.eps * self.Laplace_2d(res[-1]) + tmp[:,i-1,:,:] * self.dt)
+                # if torch.isinf(res[-1]).any():
+                #     raise ValueError('res is nan')
             # for i in range(1,len(self.T)): 
             #     integrated[:,i,:,:] = (integrated[:,i-1,:,:] + self.eps * self.Laplace_2d(integrated[:,i-1,:,:], self.dx, dt) + taus[:,i-1,:,:] * dt).reshape((len(trees), self.X.shape[0], self.X.shape[1]))
         
             # tmp = torch.matmul(tmp.reshape(B, -1), self.M_PowSq).reshape(B, self.T, self.N) * self.dt
 
-            integrated.append(torch.stack(res, dim = 1))
+            # integrated.append(torch.stack(res, dim = 1))
 
         if returnU0Feature:
             U0Feature = torch.stack(itemgetter(*self.U0FeatureIndex)(integrated), dim = -1)
