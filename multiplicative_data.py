@@ -10,6 +10,8 @@ import os
 from src.Noise import Noise
 from src.SPDEs import SPDE
 import time
+np.random.seed(0)
+
 parser = argparse.ArgumentParser()
 parser.add_argument('-N', '--N', type=int, default=1000)
 parser.add_argument('-k', '--k', type=float, default=0.1)

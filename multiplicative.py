@@ -113,7 +113,7 @@ class rsnet(nn.Module):
         R1 = R1[..., :-self.padding]
         R1 = R1.permute(0, 3, 2, 1) # [B, T, N, Hidden]
         R1 = self.decoder(R1) # [B, T, N, 1]
-        return R1[:,-1,:,:].squeeze() # [B, N]
+        return R1.squeeze() # [B, T, N]
 
 
 def train(model, device, train_loader, optimizer, criterion, epoch):
@@ -123,7 +123,7 @@ def train(model, device, train_loader, optimizer, criterion, epoch):
         W, U0, F_Xi, Y = W.to(device), U0.to(device), F_Xi.to(device), Y.to(device)
         optimizer.zero_grad()
         output = model(U0, W, F_Xi)
-        loss = criterion(output, Y[:,-1,:])
+        loss = criterion(output[:,1:,:], Y[:,1:,:])
         loss.backward()
         optimizer.step()
         train_loss += loss.item()
@@ -136,7 +136,7 @@ def test(model, device, test_loader, criterion):
         for batch_idx, (W, U0, F_Xi, Y) in enumerate(test_loader):
             W, U0, F_Xi, Y = W.to(device), U0.to(device), F_Xi.to(device), Y.to(device)
             output = model(U0, W, F_Xi)
-            loss = criterion(output, Y[:,-1,:])
+            loss = criterion(output[:,1:,:], Y[:,1:,:])
             test_loss += loss.item()
     return test_loss / len(test_loader.dataset)
 
@@ -147,7 +147,7 @@ def Inference(model, device, test_loader, criterion):
         for batch_idx, (W, U0, F_Xi, Y) in enumerate(test_loader):
             W, U0, Y = W.to(device), U0.to(device), Y.to(device)
             output = model(U0, W)
-            loss = criterion(output, Y[:,-1,:])
+            loss = criterion(output[:,1:,:], Y[:,1:,:])
             test_loss += loss.item()
     return test_loss / len(test_loader.dataset)
 
@@ -202,6 +202,7 @@ if __name__ == '__main__':
     wandb.init(project="DeepRS", entity="sdogsq", config=args)
 
     trainTime = 0
+    inferenceTime = 0
     for epoch in range(1, args.epochs + 1):
         tik = time.time()
         trainLoss = train(model, device, train_loader, optimizer, lossfn, epoch)
@@ -214,7 +215,7 @@ if __name__ == '__main__':
         tik = time.time()
         inferenceLoss = Inference(model, device, test_loader, lossfn)
         tok = time.time()
-        inferenceTime = tok - tik
+        inferenceTime += tok - tik
 
         wandb.log({"Train Loss": trainLoss, "Test Loss": testLoss})
         print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \tTime per Epoch: {:.3f} \tInference Time per Epoch: {:.3f}'\
