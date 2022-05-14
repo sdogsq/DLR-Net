@@ -19,6 +19,8 @@ parser.add_argument('-N', '--N', type=int, default=1000, metavar='N',
                     help = 'number of training realizations')
 parser.add_argument('-k', '--k', type=float, default=0.1, metavar='N',
                     help = 'parameter k in U0')
+parser.add_argument('-U', '--Nuse', type=int, default=None, metavar='N',
+                    help = 'number of training realizations')                    
 parser.add_argument('--batch_size', type=int, default=32, metavar='N',
                     help='input batch size for training (default: 32)')
 parser.add_argument('--epochs', type=int, default=500, metavar='N',
@@ -28,6 +30,12 @@ parser.add_argument('--lr', type=float, default=1e-3, metavar='N',
 parser.add_argument('--weight_decay', type=float, default=1e-5, metavar='N',
                     help='weight decay')
 args = parser.parse_args()
+
+# set training data size
+if args.Nuse is None:
+    args.Nuse = args.N
+if args.Nuse > args.N:
+    raise Exception("Required numbers of data are too large.")
 
 def parabolic_graph(data):
     # create rule with additive width 3
@@ -112,7 +120,7 @@ class rsnet(nn.Module):
         R1 = R1[..., :-self.padding]
         R1 = R1.permute(0, 3, 2, 1) # [B, T, N, Hidden]
         R1 = self.decoder(R1) # [B, T, N, 1]
-        return R1[:,-1,:,:].squeeze() # [B, N]
+        return R1.squeeze() # [B, T, N]
 
 
 def train(model, device, train_loader, optimizer, criterion, epoch):
@@ -122,7 +130,7 @@ def train(model, device, train_loader, optimizer, criterion, epoch):
         W, U0, F_Xi, Y = W.to(device), U0.to(device), F_Xi.to(device), Y.to(device)
         optimizer.zero_grad()
         output = model(U0, W, F_Xi)
-        loss = criterion(output, Y[:,-1,:])
+        loss = criterion(output[:,1:,:], Y[:,1:,:])
         loss.backward()
         optimizer.step()
         train_loss += loss.item()
@@ -135,7 +143,7 @@ def test(model, device, test_loader, criterion):
         for batch_idx, (W, U0, F_Xi, Y) in enumerate(test_loader):
             W, U0, F_Xi, Y = W.to(device), U0.to(device), F_Xi.to(device), Y.to(device)
             output = model(U0, W, F_Xi)
-            loss = criterion(output, Y[:,-1,:])
+            loss = criterion(output[:,1:,:], Y[:,1:,:])
             test_loss += loss.item()
     return test_loss / len(test_loader.dataset)
 
@@ -144,12 +152,12 @@ if __name__ == '__main__':
     train_W, test_W, train_U0, test_U0, train_Y, test_Y = train_test_split(data['W'],
                                                                            data['U0'],
                                                                            data['Soln_add'],
-                                                                           train_size=args.N, 
+                                                                           train_size=args.Nuse,
+                                                                           test_size = int(args.Nuse * 0.2),
                                                                            shuffle=False)
 
     print(f"train_W: {train_W.shape}, train_U0: {train_U0.shape}, train_Y: {train_Y.shape}")
     print(f"test_W: {test_W.shape}, test_U0: {test_U0.shape}, test_Y: {test_Y.shape}")
-
     graph = parabolic_graph(data)
     print(graph)
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
