@@ -139,7 +139,31 @@ class Graph():
             model = {IZ: model[IZ] for IZ in model if IZ[1] != "'"}
 
         return graph
-    
+    def create_ns_graph_2d():
+        def Rule1(S):
+            R = {}
+            R.update(S)
+            R.update({f"J1[{tau}]": {tau: 1} for tau in S if tau[-1] == ']' and f"J1[{tau}]" not in S.keys()})
+            R.update({f"J2[{tau}]": {tau: 1} for tau in S if tau[-1] == ']' and f"J2[{tau}]" not in S.keys()})
+            return R
+        def Rule2(S):
+            R = {}
+            R.update(S)
+            R.update({f"I({tau})": {tau: 1} for tau in S if tau[-1] == ']' and f"I[{tau}]" not in S.keys()})
+            R.update({f"I1[{tau}]": {f"I({tau})": 1} for tau in S if tau[-1] == ']' and f"I1[{tau}]" not in S.keys()})
+            R.update({f"I2[{tau}]": {f"I({tau})": 1} for tau in S if tau[-1] == ']' and f"I2[{tau}]" not in S.keys()})
+            R.update({f"J1({tau})": {tau:1} for tau in S if f"J1[{tau}]" not in S.keys()})
+            R.update({f"I(J1[{tau}]{tau})": {f"J1[{tau}]" if f"J1[{tau}]" in S.keys() else f"J1({tau})": 1, f"{tau}":1} for tau in S if tau[-1] == ']' and  f"I[J1[{tau}]{tau}]" not in S.keys()})
+            R.update({f"I1[J1[{tau}]{tau}]": {f"I(J1[{tau}]{tau})":1} for tau in S if tau[-1] == ']' and f"I1[J1[{tau}]{tau}]" not in S.keys()})
+            R.update({f"J2({tau})": {tau:1} for tau in S if f"J2[{tau}]" not in S.keys()})
+            R.update({f"I(J2[{tau}]{tau})": {f"J2[{tau}]" if f"J2[{tau}]" in S.keys() else f"J2({tau})": 1, f"{tau}":1} for tau in S if tau[-1] == ']' and f"I[J2[{tau}]{tau}]" not in S.keys()})
+            R.update({f"I2[J2[{tau}]{tau}]": {f"I(J2[{tau}]{tau})":1} for tau in S if tau[-1] == ']' and f"I2[J2[{tau}]{tau}]" not in S.keys()})
+            return R
+        S = {'I_c[u_0]':{}, 'I[xi]':{'xi':1}}
+        Res = {'xi':{}}
+        Res.update(Rule2(Rule1(S)))
+        return Res
+
     def create_model_graph_2d(self, W, X, lollipop = None, extra_planted = None, extra_deg = None):
         dx = X[1,0] - X[0,0]
 

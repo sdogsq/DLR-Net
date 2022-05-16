@@ -1,8 +1,3 @@
-from Classes.SPDEs import *
-from Classes.Rule import *
-from Classes.Model import *
-from Classes.Noise import *
-
 from Data.generator_sns import navier_stokes_2d
 from Data.random_forcing import GaussianRF
 
@@ -11,6 +6,27 @@ import torch
 from timeit import default_timer
 import math
 import os
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('-N', '--N', type=int, default=1200, metavar='N',
+                    help = 'number of training realizations')
+parser.add_argument('-S', '--S', type=int, default=64, metavar='N',
+                    help = 'Spatial Resolution')
+parser.add_argument('--sub_x', type=int, default=1, metavar='N',
+                    help = 'number of training realizations')
+parser.add_argument('--sub_t', type=int, default=1, metavar='N',
+                    help = 'number of training realizations')
+parser.add_argument('--nu', type=float, default=1e-4, metavar='N',
+                    help = 'Viscosity parameter')
+parser.add_argument('-T', '--T', type=float, default=1, metavar='N',
+                    help = 'Simulation time')
+parser.add_argument('--dt', type=float, default=1e-3, metavar='N',
+                    help = 'Temporal Resolution')
+parser.add_argument('--fixU0', action='store_true',
+                    help = 'fixU0 and generate xi->u data')
+parser.add_argument('-B', '--bs', type=float, default=100, metavar='N',
+                    help = 'Simulation batchsize')
+args = parser.parse_args()
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -23,35 +39,31 @@ def mkdir(path):
 ################################################################
 #  configurations
 ################################################################
-ntrain = 1000
-ntest = 200
-# N = 5
-N = 1200
+N = args.N
 
-sub_x = 4
-sub_t = 1
+sub_x = args.sub_x
+sub_t = args.sub_t
 
 t_tradition = 0
-t_RS = 0
 
 ################################################################
 # generate data
 ################################################################
 
-device = torch.device('cuda')
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # Viscosity parameter
-nu = 1e-4
+nu = args.nu
 
 # Spatial Resolution
-s = 64
+s = args.S
 
 # domain where we are solving
 a = [1,1]
 
 # Temporal Resolution   
-T = 5e-2
-delta_t = 1e-3
+T = args.T
+delta_t = args.dt
 
 # Set up 2d GRF with covariance parameters
 GRF = GaussianRF(2, s, alpha=3, tau=3, device=device)
@@ -73,7 +85,7 @@ record_steps = int(T/(delta_t))
 # Solve equations in batches (order of magnitude speed-up)
 
 # Batch size
-bsize = 100
+bsize = min(N,args.bs)
 
 c = 0
 
@@ -84,26 +96,30 @@ for j in range(N//bsize):
     
     t0 = default_timer()
 
-    w0 = GRF.sample(bsize) # (u0,xi)->u
-    # w0 = torch.zeros((bsize, X.shape[0], X.shape[1]), device = device) # xi->u
+    if args.fixU0:
+        w0 = torch.zeros((bsize, X.shape[0], X.shape[1]), device = device) # xi->u
+    else:
+        w0 = GRF.sample(bsize) # (u0,xi)->u
 
     sol, sol_t, force = navier_stokes_2d(a, w0, f, nu, T, delta_t, record_steps, stochastic_forcing)  
 
     # add time 0
     time = torch.zeros(record_steps+1)
     time[1:] = sol_t.cpu()
+    time = time[::sub_t]
     sol = torch.cat([w0[...,None],sol],dim=-1)
     force = torch.cat([torch.zeros_like(w0)[...,None],force],dim=-1)
 
     if j == 0:
-        Soln = sol.cpu()
-        forcing = force.cpu()
-        IC = w0.cpu()
-        Soln_t = sol_t.cpu()
+        Soln = sol.cpu()[:,::sub_x,::sub_x,::sub_t]
+        forcing = force.cpu()[:,::sub_x,::sub_x,::sub_t]
+        print(forcing.shape)
+        IC = w0.cpu()[:,::sub_x,::sub_x]
+        Soln_t = sol_t.cpu()[::sub_t]
     else:
-        Soln = torch.cat([Soln, sol.cpu()], dim=0)
-        forcing = torch.cat([forcing, force.cpu()], dim=0)
-        IC = torch.cat([IC, w0.cpu()],dim=0)
+        Soln = torch.cat([Soln, sol.cpu()[:,::sub_x,::sub_x,::sub_t]], dim=0)
+        forcing = torch.cat([forcing, force.cpu()[:,::sub_x,::sub_x,::sub_t]], dim=0)
+        IC = torch.cat([IC, w0.cpu()[:,::sub_x,::sub_x]],dim=0)
 
     c += bsize
     t1 = default_timer()
@@ -128,15 +144,4 @@ IC = IC.numpy()
 print(f"Soln shape: {Soln.shape}, time shape: {time.shape}, forcing shape: {forcing.shape}, X shape: {X.shape}, Y shape: {Y.shape}, IC shape: {IC.shape}")
 print(f"t {time}")
 mkdir("./data/")
-np.savez(f"./data/NS.npz", Solution = Soln, W = forcing, T = time.numpy(), X = X, Y = Y, U0 = IC)
-
-
-Soln = Soln[:,::sub_t,::sub_x,::sub_x]
-Soln_t = Soln_t[::sub_t]
-forcing = forcing[:,::sub_t,::sub_x,::sub_x]
-X, Y = X[::sub_x,::sub_x], Y[::sub_x,::sub_x]
-IC = IC[:,::sub_x,::sub_x]
-
-
-# scipy.io.savemat(filename+'{}.mat'.format(j), mdict={'t':time.numpy(), 'sol': sol.cpu().numpy(), 'forcing': forcing.cpu().numpy(), 'param':stochastic_forcing})
-    # scipy.io.savemat(filename+'small_{}.mat'.format(j), mdict={'t': time[::4].numpy(), 'sol': sol[:,::4,::4,::4].cpu().numpy(), 'forcing': forcing[:,::4,::4,::4].cpu().numpy(), 'param':stochastic_forcing})
+np.savez(f"./data/NS_{'xi' if args.fixU0 else 'u0_xi'}_{N}_{T:g}.npz", Solution = Soln, W = forcing, T = time.numpy(), X = X, Y = Y, U0 = IC)

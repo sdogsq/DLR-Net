@@ -10,8 +10,11 @@ class ParabolicIntegrate_2d(nn.Module):
             keys = list(graph)
             self.graph = [{keys.index(it): graph[key][it] for it in graph[key]} for key in keys] # model graph
             self.isDerivative = [(int(key[1]) if key[1].isdigit() else False) for key in graph.keys()]
+            self.Operator = [key[0] for key in graph.keys()] ## I or J
             self.only_xi = [(True if 'u_0' not in key else False) for key in graph.keys()] # if feature is only determined by xi
+            self.FeatureIndex = [i for i, key in enumerate(graph.keys()) if key[-1] != ')']
             self.U0FeatureIndex = [i for i, key in enumerate(self.only_xi) if not key] # index of features containing U0
+            self.U0FeatureIndex = sorted(list(set(self.FeatureIndex) & set(self.U0FeatureIndex)))
             self.BC = BC #Boundary condition 'D' - Dirichlet, 'N' - Neuman, 'P' - periodic
             self.eps = eps # viscosity
             self.X_points = X # discretization of space (O_X space)
@@ -21,13 +24,45 @@ class ParabolicIntegrate_2d(nn.Module):
             self.Y = len(self.Y_points) # number of space Y points
             self.T = len(self.T_points) # number of time points
 
-            self.dt, self.dx = self.T_points[1] - self.T_points[0], self.X_points[1] - self.X_points[0]  # for equaly spaced points
-            filter = torch.tensor([[[[0.,1.,0.],[1.,-4.,1.],[0.,1.,0.]]]], **self.factory_kwargs) ## kernel of 2D Laplace operator
+            self.dt = self.T_points[1] - self.T_points[0]
+            self.dx = self.X_points[1] - self.X_points[0]  # for equaly spaced points
+            self.dy = self.Y_points[1] - self.Y_points[0]
+            filter = torch.tensor([[[[0.25,0.5,0.25],[0.5,-3.,0.5],[0.25,0.5,0.25]]]], **self.factory_kwargs) ## kernel of 2D Laplace operator
             self.register_buffer("filter", filter)
 
             filterI = torch.tensor([[[[0.,0.,0.],[0.,1.,0.],[0.,0.,0.]]]], **self.factory_kwargs) + \
-                      self.eps * torch.tensor([[[[0.,1.,0.],[1.,-4.,1.],[0.,1.,0.]]]], **self.factory_kwargs)*self.dt/self.dx**2 ## kernel of 2D Laplace operator
+                      self.eps * filter * self.dt/self.dx**2 ## kernel of 2D Laplace operator
             self.register_buffer("filterI", filterI)
+            DX = self.DiffMat(self.X, self.dx) 
+            DY = self.DiffMat(self.Y, self.dy)
+            self.register_buffer("DX", DX)
+            self.register_buffer("DY", DY)
+            Jm = self.JMat(self.X_points, self.Y_points, self.dx, self.dy)
+            self.register_buffer("Jm", Jm)
+
+    def JMat(self, X, Y, dx, dy): # [X,Y,X,Y,2]
+        K = torch.ones(len(X),len(Y),len(X),len(Y),2) * dx * dy / (2 * torch.pi)
+        for i in range(len(X)):
+            for j in range(len(Y)):
+                for k in range(len(X)):
+                    for l in range(len(Y)):
+                        if (i == k and j == l):
+                            K[i,j,k,l,0] = 0.
+                            K[i,j,k,l,1] = 0.
+                        else:
+                            K[i,j,k,l,0] = (Y[j]-Y[l]) / ((X[i]-X[k])**2 + (Y[j] - Y[l])**2)
+                            K[i,j,k,l,1] = (X[k]-X[i]) / ((X[i]-X[k])**2 + (Y[j] - Y[l])**2) 
+        return K
+
+    def DiffMat(self, N, dx):
+        # A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N-1), diagonal=-1)
+        # A[0,-1], A[-1,0] = 1, -1
+        # A = A.to(**self.factory_kwargs) / (2*dx)
+        A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N), diagonal=0)
+        # A[0,-1] = 1
+        A[-1,0] = -1
+        A = A.to(**self.factory_kwargs) / (dx)
+        return A
 
     def Laplace_2d(self, arr):
         return F.conv2d(F.pad(arr.unsqueeze(1), (1,1,1,1), mode = 'circular'), self.filter).squeeze(1)*self.dt/self.dx**2 # ~ 30s
@@ -72,8 +107,9 @@ class ParabolicIntegrate_2d(nn.Module):
 
 
         return Solution
+    # def KernelMat(self, X, Y, dx, dt): # evaluation (I - dt \Delta)^{-1} of shape [XY,XY]
 
-    def forward(self, W = None, Latent = None, XiFeature = None, returnU0Feature = False, diff = True):
+    def forward(self, W = None, Latent = None, XiFeature = None, returnFeature = 'all', diff = False):
         '''
             W: [B, T, X, Y]
             Latent: [B, T, X, Y]
@@ -93,9 +129,9 @@ class ParabolicIntegrate_2d(nn.Module):
             # differentiate noise/forcing to create dW 
             if diff:
                 dW = torch.zeros(W.shape, **factory_kwargs)
-                dW[:,1:,:] = torch.diff(W, dim = 1)/self.dt
+                dW[:,1:,:,:] = torch.diff(W, dim = 1)/self.dt
             else:
-                dW = W*self.dt
+                dW = W#*self.dt
             integrated.append(dW)
             # if torch.isinf(integrated[-1]).any():
             #     raise ValueError('dW is nan')
@@ -117,7 +153,15 @@ class ParabolicIntegrate_2d(nn.Module):
                 continue
             
             if (self.isDerivative[k]): # derivative
-                integrated.append(self.discrete_diff_2d(integrated[list(dic.keys())[0]], self.X, axis = self.isDerivative[k], higher = False)/self.dx)
+                if (self.Operator[k] == 'I'):
+                    if self.isDerivative[k] == 1:
+                        tp = torch.einsum('btxy,xn->btny', integrated[list(dic.keys())[0]], self.DX)
+                    elif self.isDerivative[k] == 2:
+                        tp = torch.einsum('btxy,yn->btxn', integrated[list(dic.keys())[0]], self.DY)
+                    # integrated.append(self.discrete_diff_2d(integrated[list(dic.keys())[0]], self.X, axis = self.isDerivative[k], higher = False)/self.dx)
+                elif (self.Operator[k] == 'J'):
+                        tp = torch.einsum('btxy,xymn->btmn', integrated[list(dic.keys())[0]], self.Jm[...,self.isDerivative[k]-1])
+                integrated.append(tp)
                 continue
             
             # compute the integral with u_0
@@ -147,12 +191,15 @@ class ParabolicIntegrate_2d(nn.Module):
 
             # integrated.append(torch.stack(res, dim = 1))
 
-        if returnU0Feature:
+        if returnFeature == 'all':
+            integrated = torch.stack(integrated, dim = -1)
+            return integrated
+        elif returnFeature == 'U0':
             U0Feature = torch.stack(itemgetter(*self.U0FeatureIndex)(integrated), dim = -1)
             return U0Feature
         else:
-            integrated = torch.stack(integrated, dim = -1)
-            return integrated
+            Feature = torch.stack(itemgetter(*self.FeatureIndex)(integrated), dim = -1)
+            return Feature
 
         #extract the trees from dictionary which are not purely polyniomials and were not already integrated
         trees = [tree for tree in tau.keys() if 'I[{}]'.format(tree) not in done and 'I[{}]'.format(tree) not in exceptions] 
@@ -183,20 +230,18 @@ class ParabolicIntegrate_2d(nn.Module):
 
     def discrete_diff_2d(self, vec, N, axis, higher = True):
         a = torch.zeros_like(vec)
-        if len(a.shape) == 1:
-            a = a.reshape(len(vec)//N, N)
         if axis == 1:
             if higher: # central approximation of a dervative
-                a[:,:-1,:] = (torch.roll(vec[:,:-1,:], -1, dims = 1) - torch.roll(vec[:,:-1,:], 1, dims = 1))/2
+                a[...,:-1,:] = (torch.roll(vec[...,:-1,:], -1, dims = -2) - torch.roll(vec[...,:-1,:], 1, dims = -2))/2
             else:
-                a[:,:-1,:] = a[:,:-1,:] - torch.roll(vec[:,:-1,:], 1, dims = 1)
-            a[:,-1,:] = a[:,0,:] # enforce periodic boundary condions
+                a[...,:-1,:] = vec[...,:-1,:] - torch.roll(vec[...,:-1,:], 1, dims = -2)
+            a[...,-1,:] = a[...,0,:] # enforce periodic boundary condions
         if axis == 2:
             if higher: # central approximation of a dervative
-                a[:,:,:-1] = (torch.roll(vec[:,:,:-1], -1, dims = 2) - torch.roll(vec[:,:,:-1], 1, dims = 2))/2
+                a[...,:,:-1] = (torch.roll(vec[...,:,:-1], -1, dims = -1) - torch.roll(vec[...,:,:-1], 1, dims = -1))/2
             else:
-                a[:,:,:-1] = a[:,:,:-1] - torch.roll(vec[:,:,:-1], 1, dims = 2)
-            a[:,:,-1] = a[:,:,0] # enforce periodic boundary condions
+                a[...,:,:-1] = vec[...,:,:-1] - torch.roll(vec[...,:,:-1], 1, dims = -1)
+            a[...,:,-1] = a[...,:,0] # enforce periodic boundary condions
 
         return a
 
