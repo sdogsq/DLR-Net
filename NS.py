@@ -115,7 +115,7 @@ class rsnet_2d(nn.Module):
         self.net = [FNO_layer(modes1, modes2, modes3, width) for i in range(self.L-1)]
         self.net += [FNO_layer(modes1, modes2, modes3, width, last=True)]
         self.net = nn.Sequential(*self.net)
-        self.fc0 = nn.Linear(self.F + self.FU0 +  3, width)
+        self.fc0 = nn.Linear(1 + self.F + self.FU0 + 3, width)
         self.decoder = nn.Sequential(
             nn.Linear(width, 128),
             nn.ReLU(inplace=True),
@@ -147,17 +147,10 @@ class rsnet_2d(nn.Module):
         Feature_Xi: [B, T, X, Y, F] pre-computed features only containing Xi
         '''
         U0 = self.RSLayer0.I_c(U0) # [B, T, X, Y]
-
-        R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi) # [B, T, X, Y, F + 1]
-        # R1 = R1[..., 1:] # [B, T, X, Y, F],  drop Xi
-        # print("A")
-        O1 = R1[..., 1:] # [B, T, X, Y, F],  drop Xi
-        # U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
+        R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnFeature = 'normal')
+        O1 = R1 # [B, T, X, Y, F + 1] with xi
         U0 = self.down0(O1).squeeze() # [B, T, X, Y]
-        # U0 = self.down1(O1.permute(0, 2, 3, 1, 4).reshape(-1, self.T * self.F, 1)).reshape(-1,self.T, self.X, self.Y) # [B, T, X, Y]
-        R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnU0Feature = True)
-        # print("B")
-        R1 = torch.cat((O1, R1), dim = -1)  # [B, T, X, Y, F + FU0]
+        R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnFeature = 'U0')
         grid = self.get_grid(R1.shape, R1.device)
         R1 = torch.cat((R1, grid), dim=-1) # [B, T, X, Y, F + FU0 + 3]
         R1 = self.fc0(R1)

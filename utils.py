@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 from scipy import io
@@ -50,6 +51,10 @@ def profile(model, device, train_loader, optimizer, criterion, epoch):
         print(prof.key_averages().table(sort_by="self_cpu_time_total"))
         break
 
+def mkdir(path):
+    folder = os.path.exists(path)
+    if not folder:
+        os.makedirs(path)
 class LpLoss(object):
     def __init__(self, d=2, p=2, size_average=True, reduction=True):
         super(LpLoss, self).__init__()

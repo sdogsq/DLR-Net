@@ -12,7 +12,9 @@ class ParabolicIntegrate_2d(nn.Module):
             self.isDerivative = [(int(key[1]) if key[1].isdigit() else False) for key in graph.keys()]
             self.Operator = [key[0] for key in graph.keys()] ## I or J
             self.only_xi = [(True if 'u_0' not in key else False) for key in graph.keys()] # if feature is only determined by xi
-            self.FeatureIndex = [i for i, key in enumerate(graph.keys()) if key[-1] != ')']
+            self.FeatureIndex = [i for i, key in enumerate(graph.keys()) if key[-1] != ')'] #include xi
+            self.xiFeatureIndex = [i for i, key in enumerate(self.only_xi) if key] # index of features containing U0
+            self.xiFeatureIndex = sorted(list(set(self.FeatureIndex) & set(self.xiFeatureIndex)))
             self.U0FeatureIndex = [i for i, key in enumerate(self.only_xi) if not key] # index of features containing U0
             self.U0FeatureIndex = sorted(list(set(self.FeatureIndex) & set(self.U0FeatureIndex)))
             self.BC = BC #Boundary condition 'D' - Dirichlet, 'N' - Neuman, 'P' - periodic
@@ -42,6 +44,7 @@ class ParabolicIntegrate_2d(nn.Module):
 
     def JMat(self, X, Y, dx, dy): # [X,Y,X,Y,2]
         K = torch.ones(len(X),len(Y),len(X),len(Y),2) * dx * dy / (2 * torch.pi)
+        return K
         for i in range(len(X)):
             for j in range(len(Y)):
                 for k in range(len(X)):
@@ -55,13 +58,13 @@ class ParabolicIntegrate_2d(nn.Module):
         return K
 
     def DiffMat(self, N, dx):
-        # A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N-1), diagonal=-1)
-        # A[0,-1], A[-1,0] = 1, -1
-        # A = A.to(**self.factory_kwargs) / (2*dx)
-        A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N), diagonal=0)
-        # A[0,-1] = 1
-        A[-1,0] = -1
-        A = A.to(**self.factory_kwargs) / (dx)
+        A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N-1), diagonal=-1)
+        A[0,-1], A[-1,0] = 1, -1
+        A = A.to(**self.factory_kwargs) / (2*dx)
+        # A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N), diagonal=0)
+        # # A[0,-1] = 1
+        # A[-1,0] = -1
+        # A = A.to(**self.factory_kwargs) / (dx)
         return A
 
     def Laplace_2d(self, arr):
@@ -152,6 +155,10 @@ class ParabolicIntegrate_2d(nn.Module):
                 integrated.append(XiFeature[...,k])
                 continue
             
+            if (not self.only_xi[k] and returnFeature == 'xi'):
+                integrated.append(torch.ones(B, self.T, self.X, self.Y,  **factory_kwargs))
+                continue
+
             if (self.isDerivative[k]): # derivative
                 if (self.Operator[k] == 'I'):
                     if self.isDerivative[k] == 1:
@@ -192,14 +199,18 @@ class ParabolicIntegrate_2d(nn.Module):
             # integrated.append(torch.stack(res, dim = 1))
 
         if returnFeature == 'all':
-            integrated = torch.stack(integrated, dim = -1)
-            return integrated
+            Feature = torch.stack(integrated, dim = -1)
         elif returnFeature == 'U0':
-            U0Feature = torch.stack(itemgetter(*self.U0FeatureIndex)(integrated), dim = -1)
-            return U0Feature
+            if (len(self.U0FeatureIndex) == 1):
+                Feature = itemgetter(*self.U0FeatureIndex)(integrated).unsqueeze(-1)
+            else:
+                Feature = torch.stack(itemgetter(*self.U0FeatureIndex)(integrated), dim = -1)
+        elif returnFeature == 'xi':
+            Feature = torch.stack(itemgetter(*self.xiFeatureIndex)(integrated), dim = -1)
         else:
             Feature = torch.stack(itemgetter(*self.FeatureIndex)(integrated), dim = -1)
-            return Feature
+        
+        return Feature
 
         #extract the trees from dictionary which are not purely polyniomials and were not already integrated
         trees = [tree for tree in tau.keys() if 'I[{}]'.format(tree) not in done and 'I[{}]'.format(tree) not in exceptions] 
