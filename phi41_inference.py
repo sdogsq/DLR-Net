@@ -151,8 +151,8 @@ def test(model, device, test_loader, criterion):
 
 def Inference(model, device, test_loader):
     for batch_idx, (W, U0, F_Xi, Y) in enumerate(test_loader):
-        dummy_U0 = torch.rand_like(U0[[0]] ,dtype=torch.float, device = device)
-        dummy_W = torch.rand_like(W[[0]] ,dtype=torch.float, device = device)
+        dummy_U0 = torch.rand_like(U0 ,dtype=torch.float, device = device)
+        dummy_W = torch.rand_like(W ,dtype=torch.float, device = device)
         print(U0.shape, W.shape)
         print(f"Test U0: {dummy_U0.shape}, Test W: {dummy_W.shape}")
         break
@@ -212,7 +212,7 @@ if __name__ == '__main__':
     testset = TensorDataset(test_W, test_U0, test_F_Xi, test_Y)
     test_loader = DataLoader(testset,
                              batch_size=100,
-                             shuffle=True,
+                             shuffle=False,
                              pin_memory=True,
                              persistent_workers=True,
                              drop_last=False,
@@ -226,7 +226,6 @@ if __name__ == '__main__':
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, verbose = False)
     #torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.5)
 
-    wandb.init(project="DeepRS", entity="sdogsq", config=args)
 
     trainTime = 0
     for epoch in range(1, args.epochs + 1):
@@ -237,11 +236,10 @@ if __name__ == '__main__':
         scheduler.step()
 
         trainTime += tok - tik
-        wandb.log({"Train Loss": trainLoss, "Test Loss": testLoss})
         print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \tTime per Epoch: {:.3f}'\
               .format(epoch, trainLoss, testLoss, trainTime / epoch))
 
-        if args.inference and epoch == 5:
+        if epoch == 5:
             Inference(model, device, test_loader)
             exit(0)
             # profile(model, device, train_loader, optimizer, lossfn, epoch)
