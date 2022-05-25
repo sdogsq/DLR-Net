@@ -14,7 +14,7 @@ parser.add_argument('-S', '--S', type=int, default=64, metavar='N',
                     help = 'Spatial Resolution')
 parser.add_argument('--sub_x', type=int, default=1, metavar='N',
                     help = 'number of training realizations')
-parser.add_argument('--sub_t', type=int, default=1, metavar='N',
+parser.add_argument('--sub_t', type=int, default=10, metavar='N',
                     help = 'number of training realizations')
 parser.add_argument('--nu', type=float, default=1e-4, metavar='N',
                     help = 'Viscosity parameter')
@@ -24,7 +24,7 @@ parser.add_argument('--dt', type=float, default=1e-3, metavar='N',
                     help = 'Temporal Resolution')
 parser.add_argument('--fixU0', action='store_true',
                     help = 'fixU0 and generate xi->u data')
-parser.add_argument('-B', '--bs', type=float, default=100, metavar='N',
+parser.add_argument('-B', '--bs', type=int, default=100, metavar='N',
                     help = 'Simulation batchsize')
 args = parser.parse_args()
 
@@ -66,8 +66,8 @@ T = args.T
 delta_t = args.dt
 
 # Set up 2d GRF with covariance parameters
-GRF = GaussianRF(2, s, alpha=3, tau=3, device=device)
-
+# GRF = GaussianRF(2, s, alpha=3, tau=3, device=device)
+GRF = GaussianRF(2, s, alpha=2.5, tau=7, device=device)
 # Forcing function: 0.1*(sin(2pi(x+y)) + cos(2pi(x+y)))
 t = torch.linspace(0, 1, s+1, device=device)
 t = t[0:-1]
@@ -91,6 +91,7 @@ c = 0
 
 #Sample random fields
 # w0 = GRF.sample(1).repeat(bsize,1,1)
+
 
 for j in range(N//bsize):
     
@@ -126,6 +127,8 @@ for j in range(N//bsize):
     print(j, c, (t1-t0)/bsize)
     t_tradition = t_tradition + t1 - t0
 
+print("Tradition Solver:", t_tradition / N)
+exit(0)
 # Soln: [sample, x, y, step]
 # Soln_t: [t=step*delta_t]
 
@@ -135,9 +138,9 @@ forcing = forcing.cpu()
 X, Y = X.cpu(), Y.cpu()
 IC = IC.cpu()
 
-Soln = Soln.transpose(2,3).transpose(1,2).numpy()
-Soln_t = Soln_t.numpy()
-forcing = forcing.transpose(2,3).transpose(1,2).numpy()
+Soln = Soln.transpose(2,3).transpose(1,2).numpy() # [sample, step, x, y]
+Soln_t = Soln_t.numpy() # [step]
+forcing = forcing.transpose(2,3).transpose(1,2).numpy() # [sample, step, x, y]
 X, Y = X.numpy(), Y.numpy()
 IC = IC.numpy()
 
@@ -145,3 +148,4 @@ print(f"Soln shape: {Soln.shape}, time shape: {time.shape}, forcing shape: {forc
 print(f"t {time}")
 mkdir("./data/")
 np.savez(f"./data/NS_{'xi' if args.fixU0 else 'u0_xi'}_{N}_{T:g}.npz", Solution = Soln, W = forcing, T = time.numpy(), X = X, Y = Y, U0 = IC)
+print(f"Saved data to ./data/NS_{'xi' if args.fixU0 else 'u0_xi'}_{N}_{T:g}.npz")

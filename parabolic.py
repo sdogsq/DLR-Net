@@ -29,6 +29,10 @@ parser.add_argument('--lr', type=float, default=1e-3, metavar='N',
                     help='learning rate')
 parser.add_argument('--weight_decay', type=float, default=1e-5, metavar='N',
                     help='weight decay')
+parser.add_argument('-H', '--height', type=int, default=2, metavar='N',
+                    help = 'feature height')
+parser.add_argument('--nlog', type=int, default=5, metavar='N',
+                    help='frequency of log printing (default: 5)')
 args = parser.parse_args()
 
 # set training data size
@@ -44,7 +48,7 @@ def parabolic_graph(data):
     # initialize integration map I
     I = SPDE(BC = 'P', T = data['T'], X = data['X']).Integrate_Parabolic_trees 
 
-    G = Graph(integration = I, rule = R, height = 2, deg = 7.5) # initialize graph
+    G = Graph(integration = I, rule = R, height = args.height, deg = 7.5) # initialize graph
 
     extra_deg = 2
     key = "I_c[u_0]"
@@ -68,14 +72,14 @@ class rsnet(nn.Module):
             nn.GELU(),
             nn.Linear(32, 1)
         )
-        self.down1 = nn.Sequential(
-            nn.Conv1d(self.T * self.F, 32 * self.T, kernel_size=1, groups = self.T),
-            nn.GELU(),
-            nn.Conv1d(32 * self.T, self.T, kernel_size = 1, groups = self.T)
-        )
+        # self.down1 = nn.Sequential(
+        #     nn.Conv1d(self.T * self.F, 32 * self.T, kernel_size=1, groups = self.T),
+        #     nn.GELU(),
+        #     nn.Conv1d(32 * self.T, self.T, kernel_size = 1, groups = self.T)
+        # )
         self.L = 4
         self.padding = 6 
-        modes1, modes2, width = 32, 24, 32
+        modes1, modes2, width = 16, 16, 8 #32, 24, 32
         self.net = [FNO_layer(modes1, modes2, width) for i in range(self.L-1)]
         self.net += [FNO_layer(modes1, modes2, width, last=True)]
         self.net = nn.Sequential(*self.net)
@@ -106,7 +110,7 @@ class rsnet(nn.Module):
 
         O1 = R1[..., 1:] # [B, T, N, F],  drop Xi
         # U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
-        U0 = self.down0(O1).squeeze() # [B, T, N]
+        U0 = self.down0(O1).squeeze(3) # [B, T, N]
         # U0 = self.down1(O1.permute(0, 2, 1, 3).reshape(-1, self.T * self.F, 1)).reshape(-1,self.T, self.X) # [B, T, N]
         R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnU0Feature = True)
 
@@ -189,7 +193,14 @@ if __name__ == '__main__':
 
     # ------ begin training ------
     model = rsnet(graph, data['T'], data['X']).to(device)
-
+    def count_params(model):
+        c = 0
+        from functools import reduce
+        import operator
+        for p in list(model.parameters()):
+            c += reduce(operator.mul, list(p.size()))
+        return c
+    print("Params", count_params(model))
     lossfn = LpLoss(size_average=False)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, verbose = False)
@@ -202,13 +213,13 @@ if __name__ == '__main__':
         tik = time.time()
         trainLoss = train(model, device, train_loader, optimizer, lossfn, epoch)
         tok = time.time()
-        testLoss = test(model, device, test_loader, lossfn)
+        trainTime += tok - tik
         scheduler.step()
 
-        trainTime += tok - tik
-        wandb.log({"Train Loss": trainLoss, "Test Loss": testLoss})
-        print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \tTime per Epoch: {:.3f}'\
-              .format(epoch, trainLoss, testLoss, trainTime / epoch))
-        # if (epoch == 5):
-        #     profile(model, device, train_loader, optimizer, lossfn, epoch)
-        #     break
+        if (epoch-1) % args.nlog == 0:
+            testLoss = test(model, device, test_loader, lossfn)
+
+            wandb.log({"Train Loss": trainLoss, "Test Loss": testLoss})
+            print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \t\
+                   Training Time per Epoch: {:.3f} \t'\
+                   .format(epoch, trainLoss, testLoss, trainTime / epoch))

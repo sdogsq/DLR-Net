@@ -79,34 +79,43 @@ def train(model, device, train_loader, optimizer, criterion, epoch):
         train_loss += loss.item()
     return train_loss / len(train_loader.dataset)
 
-def saveplot(pred, u, epoch):
+def saveplot(pred, u, epoch, batch_idx, gap = 20):
     import matplotlib.pyplot as plt
     T = pred.shape[1]
-    fig, ax = plt.subplots(2,T,figsize=(2*T,4))
-    for i in range(T):
+    fig, ax = plt.subplots(2,(T//gap),figsize=(2.4*(T//gap),4))
+    XX, YY = np.meshgrid(np.linspace(0,1,u.shape[-2]),np.linspace(0,1,u.shape[-1]))
+    for id,t in enumerate(range(gap-1,T,gap)):
+        print(id,t)
         if torch.is_tensor(u):
-            ax[0][i].contourf(u[0,i,...].detach().cpu().numpy())
-            ax[1][i].contourf(pred[0,i,...].detach().cpu().numpy())
+            ax[0][id].contourf(XX,YY,u[0,t,...].detach().cpu().numpy(), levels = 30, cmap=plt.get_cmap('jet'))
+            ax[1][id].contourf(XX,YY,pred[0,t,...].detach().cpu().numpy(), levels = 30, cmap=plt.get_cmap('jet'))
         else:
-            ax[0][i].contourf(u[0,i,...])
-            ax[1][i].contourf(pred[0,i,...])
-        ax[0][i].set_title(f't = {i}')
-    plt.savefig(f"./fig/{epoch}.pdf", bbox_inches='tight')
+            ax[0][id].contourf(u[0,t,...])
+            ax[1][id].contourf(pred[0,t,...])
+        ax[0][id].set_title(f't = {(t+1)/100}s')
+        # ax[0][id].set_xlim([0,1])
+        # ax[0][id].set_ylim([0,1])
+    plt.savefig(f"./fig/{epoch}-{batch_idx}.pdf", bbox_inches='tight')
+    print(f"./fig/{epoch}-{batch_idx}.pdf")
     plt.clf()
 
 def test(model, device, test_loader, criterion, epoch):
     model.eval()
     test_loss = 0
+    minloss = 999
     with torch.no_grad():
         for batch_idx, (W, U0, F_Xi, Y) in enumerate(test_loader):
             W, U0, F_Xi, Y = W.to(device), U0.to(device), F_Xi.to(device), Y.to(device)
             output = model(U0, W, F_Xi)
             loss = criterion(output[:,1:,...], Y[:,1:,...])
             test_loss += loss.item()
-        # saveplot(output, Y, epoch)
+            if (loss.item() < 0.1):
+                saveplot(output, Y, epoch, batch_idx)
+                minloss = loss.item()
+                print(minloss)
     return test_loss / len(test_loader.dataset)
 
-def Inference(model, xiLayer, device, test_loader):
+def inferenceTime(model, xiLayer, device, test_loader):
     from tqdm import tqdm
     for batch_idx, (W, U0, Y) in enumerate(test_loader):
         dummy_U0 = torch.rand_like(U0, dtype=torch.float, device = device)
@@ -158,7 +167,7 @@ class rsnet_2d(nn.Module):
 
         self.L = 4
         self.padding = 6
-        modes1, modes2, modes3, width = 8, 8, 8, 8 #16, 16, 10, 8 #8, 8, 8, 20
+        modes1, modes2, modes3, width = 8, 8, 8, 8 #8, 8, 8, 20
         self.net = [FNO_layer(modes1, modes2, modes3, width) for i in range(self.L-1)]
         self.net += [FNO_layer(modes1, modes2, modes3, width, last=True)]
         self.net = nn.Sequential(*self.net)
@@ -200,7 +209,7 @@ class rsnet_2d(nn.Module):
         R1 = R1[..., :-self.padding]
         R1 = R1.permute(0, 4, 2, 3, 1) # [B, T, X, Y, Hidden]
         R1 = self.decoder(R1) # [B, T, X, Y, 1]
-        return R1.squeeze() # [B, T, X, Y]
+        return R1.squeeze(-1) # [B, T, X, Y]
 
 def dataloader_2d(u, xi=None, ntrain=1000, ntest=200, T=51, sub_t=1, sub_x=4):
 
@@ -261,15 +270,100 @@ if __name__ == '__main__':
 
     model = rsnet_2d(graph, data['T'], X = data['X'][:,0], Y = data['Y'][0]).to(device)
     print("Trainable parameter number: ", sum(p.numel() for p in model.parameters() if p.requires_grad))
+    savePath = "/home/shiqi/PDE/Deep-Regularity-Structure/save/8888NS_u0_xi_Namespace(N=1000, T=1, batch_size=64, epochs=500, fixU0=False, height=1, lr=0.01, nlog=5, nu=0.0001, sub_t=1, sub_x=4, weight_decay=1e-05).pt"
+    #'/home/shiqi/PDE/Deep-Regularity-Structure/save/8888NS_xi_Namespace(N=1000, T=1, batch_size=64, epochs=500, fixU0=True, height=1, lr=0.01, nlog=5, nu=0.0001, sub_t=1, sub_x=4, weight_decay=1e-05).pt'
+    #"/home/shiqi/PDE/Deep-Regularity-Structure/save/8888NS_xi_Namespace(N=1000, T=1, batch_size=64, epochs=500, fixU0=True, height=2, lr=0.01, nlog=5, nu=0.0001, sub_t=1, sub_x=4, weight_decay=1e-05).pt"
+    #"/home/shiqi/PDE/Deep-Regularity-Structure/save/NS_u0_xi_Namespace(N=1000, T=1, batch_size=64, epochs=500, fixU0=False, height=1, lr=0.01, nlog=5, nu=0.0001, sub_t=1, sub_x=4, weight_decay=1e-05).pt" 
+    # "/home/shiqi/PDE/Deep-Regularity-Structure/save/1616108NS_xi_Namespace(N=1000, T=1, batch_size=64, epochs=500, fixU0=True, height=1, lr=0.001, nlog=5, nu=0.0001, sub_t=1, sub_x=4, weight_decay=1e-05).pt"
+    #"/home/shiqi/PDE/Deep-Regularity-Structure/save/1616108NS_xi_Namespace(N=1000, T=1, batch_size=64, epochs=500, fixU0=True, height=2, lr=0.001, nlog=5, nu=0.0001, sub_t=1, sub_x=4, weight_decay=1e-05).pt"
 
-    testset = TensorDataset(test_W, test_U0, test_Y)
+
+    pretrained_dict = torch.load(savePath)
+    model_dict = model.state_dict()
+    # 1. filter out unnecessary keys
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if not k.startswith("RSLayer") and k != 'grid'}
+    # print(pretrained_dict.keys())
+    # 2. overwrite entries in the existing state dict
+    model_dict.update(pretrained_dict) 
+    # 3. load the new state dict
+    model.load_state_dict(model_dict)
+
+    print("Model's state_dict:")
+    for param_tensor in model.state_dict():
+        print(param_tensor, "\t", model.state_dict()[param_tensor].size())
+
+    lossfn = LpLoss(size_average=False)
+
+    Feature_Xi = cacheXiFeature_2d(graph, T = data['T'], X = data['X'][:,0], Y = data['Y'][0],\
+                                   W = train_W, eps = args.nu, device = device)
+    print(Feature_Xi.shape)
+    trainset = TensorDataset(train_W, train_U0, Feature_Xi, train_Y)
+    train_loader = DataLoader(trainset,
+                              batch_size=args.batch_size,
+                              shuffle=False,
+                              pin_memory=True,
+                              persistent_workers=True,
+                              drop_last=True,
+                              num_workers=4)
+    trainloss = test(model, device, train_loader, lossfn, 1)
+    print(f"testLoss: {trainloss}")
+
+    test_F_Xi = cacheXiFeature_2d(graph, T = data['T'], X = data['X'][:,0], Y = data['Y'][0],\
+                                  W = test_W, eps = args.nu, device = device)
+
+    testset = TensorDataset(test_W, test_U0, test_F_Xi, test_Y)
+
+    # testset = TensorDataset(test_W, test_U0, test_Y)
     test_loader = DataLoader(testset,
-                             batch_size=100,
+                             batch_size=1,
                              shuffle=False,
                              pin_memory=True,
                              persistent_workers=True,
                              drop_last=False,
                              num_workers=4)
 
+    testLoss = test(model, device, test_loader, lossfn, 0)
+    print(f"testLoss: {testLoss}")
+
+    exit(0)
+    # cache Xi fatures
+    Feature_Xi = cacheXiFeature_2d(graph, T = data['T'], X = data['X'][:,0], Y = data['Y'][0],\
+                                   W = train_W, eps = args.nu, device = device)
+    print(Feature_Xi.shape)
+    trainset = TensorDataset(train_W, train_U0, Feature_Xi, train_Y)
+    train_loader = DataLoader(trainset,
+                              batch_size=args.batch_size,
+                              shuffle=True,
+                              pin_memory=True,
+                              persistent_workers=True,
+                              drop_last=True,
+                              num_workers=4)
+
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, verbose = False)
+    #torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.5)
+
+    wandb.init(project="DeepRS", entity="sdogsq", config=args)
+
+    trainTime = 0
+    for epoch in range(1, args.epochs + 1):
+        tik = time.time()
+        trainLoss = train(model, device, train_loader, optimizer, lossfn, epoch)
+        tok = time.time()
+        trainTime += tok - tik
+        scheduler.step()
+
+        if (epoch-1) % args.nlog == 0:
+            testLoss0 = test(model, device, test_loader, lossfn, epoch)
+            savePath = f"./save/test.pt"
+            torch.save(model.state_dict(), savePath)
+            model.load_state_dict(torch.load(savePath))
+            testLoss1 = test(model, device, test_loader, lossfn, epoch)
+            print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \tTest Loss1: {:.6f} \t\
+                   Training Time per Epoch: {:.3f} \t'\
+                   .format(epoch, trainLoss, testLoss0, testLoss1, trainTime / epoch))
+
+
     xiLayer = ParabolicIntegrate_2d(graph, T = data['T'], X = data['X'][:,0], Y = data['Y'][0], eps = args.nu).to(device)
-    Inference(model, xiLayer, device, test_loader)
+    inferenceTime(model, xiLayer, device, test_loader)

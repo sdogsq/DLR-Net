@@ -131,11 +131,14 @@ class ParabolicIntegrate(nn.Module):
             integrated.append(tmp)
 
         if returnU0Feature:
-            U0Feature = torch.stack(itemgetter(*self.U0FeatureIndex)(integrated), dim = 3)
-            return U0Feature
+            if (len(self.U0FeatureIndex) == 1):
+                Feature = itemgetter(*self.U0FeatureIndex)(integrated).unsqueeze(-1)
+            else:
+                Feature = torch.stack(itemgetter(*self.U0FeatureIndex)(integrated), dim = -1)
         else:
-            integrated = torch.stack(integrated, dim = 3)
-            return integrated
+            Feature = torch.stack(integrated, dim = 3)
+
+        return Feature
 
 
 #===========================================================================
