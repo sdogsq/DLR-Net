@@ -61,28 +61,12 @@ class ParabolicIntegrate_2d(nn.Module):
         A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N-1), diagonal=-1)
         A[0,-1], A[-1,0] = 1, -1
         A = A.to(**self.factory_kwargs) / (2*dx)
-        # A = torch.diag(-1*torch.ones(N-1), diagonal=1) + torch.diag(torch.ones(N), diagonal=0)
-        # # A[0,-1] = 1
-        # A[-1,0] = -1
-        # A = A.to(**self.factory_kwargs) / (dx)
+
         return A
 
     def Laplace_2d(self, arr):
         return F.conv2d(F.pad(arr.unsqueeze(1), (1,1,1,1), mode = 'circular'), self.filter).squeeze(1)*self.dt/self.dx**2 # ~ 30s
-        out = torch.zeros(arr.shape, dtype = arr.dtype, device = arr.device)
-        out[:,1:-1,:] += torch.diff(torch.diff(arr, axis=1), axis = 1)
-        out[:,:,1:-1] += torch.diff(torch.diff(arr, axis=2), axis = 2)
-        # if torch.isinf(out).any():
-        #     print(arr)
-        #     raise ValueError('tmp is nan')
-        if self.BC =='P':
-            out[:,0,1:-1] = arr[:,1,1:-1] + arr[:,-1,1:-1] + arr[:,0,0:-2] + arr[:,0,2:] - 4*arr[:,0,1:-1]
-            out[:,-1,1:-1] = arr[:,0,1:-1] + arr[:,-2,1:-1] + arr[:,-1,0:-2] + arr[:,-1,2:] - 4*arr[:,-1,1:-1]
-            out[:,1:-1,0] = arr[:,1:-1,1] + arr[:,1:-1,-1] + arr[:,0:-2,0] + arr[:,2:,0] - 4*arr[:,1:-1,0]
-            out[:,1:-1,-1] = arr[:,1:-1,0] + arr[:,1:-1,-2] + arr[:,0:-2,-1] + arr[:,2:,-1] - 4*arr[:,1:-1,-1]
-        # if torch.isinf(out).any():
-        #     raise ValueError('tmp is nan')
-        # print(torch.max(torch.abs(arr)),torch.max(torch.abs(out-F.conv2d(F.pad(arr.unsqueeze(1), (1,1,1,1), mode = 'circular'), self.filter).squeeze(1) )))
+
 
         return out*self.dt/self.dx**2 # ~ 45s
 
@@ -104,9 +88,6 @@ class ParabolicIntegrate_2d(nn.Module):
         # mu = sigma = 0 for solving I_c[u_0]
         for i in range(1, self.T):
             Solution[:,i,:,:] = self.Laplace_I_2d(Solution[:,i-1,:,:])
-            # tmp = self.Laplace_I_2d(Solution[:,i-1,:,:])
-            # Solution[:,i,:,:] = Solution[:,i-1,:,:] + self.eps * self.Laplace_2d(Solution[:,i-1,:,:])
-            # print(torch.max(torch.abs(Solution[:,i,:,:])),torch.max(torch.abs(Solution[:,i,:,:] - tmp)), torch.norm(Solution[:,i,:,:] - tmp))
 
 
         return Solution
@@ -165,7 +146,7 @@ class ParabolicIntegrate_2d(nn.Module):
                         tp = torch.einsum('btxy,xn->btny', integrated[list(dic.keys())[0]], self.DX)
                     elif self.isDerivative[k] == 2:
                         tp = torch.einsum('btxy,yn->btxn', integrated[list(dic.keys())[0]], self.DY)
-                    # integrated.append(self.discrete_diff_2d(integrated[list(dic.keys())[0]], self.X, axis = self.isDerivative[k], higher = False)/self.dx)
+
                 elif (self.Operator[k] == 'J'):
                         tp = torch.einsum('btxy,xymn->btmn', integrated[list(dic.keys())[0]], self.Jm[...,self.isDerivative[k]-1])
                 integrated.append(tp)
@@ -185,18 +166,6 @@ class ParabolicIntegrate_2d(nn.Module):
             for i in range(1,self.T):
                 tmp[:,i,:,:] = self.Laplace_I_2d(tmp[:,i-1,:,:]) + tmp[:,i,:,:]
             integrated.append(tmp)
-            # res = [torch.zeros(B, self.X, self.Y, **factory_kwargs)] # T * [B, X, Y]
-            # for i in range(1,self.T):
-            #     res.append(self.Laplace_I_2d(res[-1]) + tmp[:,i-1,:,:] * self.dt)
-                # res.append(res[-1] + self.eps * self.Laplace_2d(res[-1]) + tmp[:,i-1,:,:] * self.dt)
-                # if torch.isinf(res[-1]).any():
-                #     raise ValueError('res is nan')
-            # for i in range(1,len(self.T)): 
-            #     integrated[:,i,:,:] = (integrated[:,i-1,:,:] + self.eps * self.Laplace_2d(integrated[:,i-1,:,:], self.dx, dt) + taus[:,i-1,:,:] * dt).reshape((len(trees), self.X.shape[0], self.X.shape[1]))
-        
-            # tmp = torch.matmul(tmp.reshape(B, -1), self.M_PowSq).reshape(B, self.T, self.N) * self.dt
-
-            # integrated.append(torch.stack(res, dim = 1))
 
         if returnFeature == 'all':
             Feature = torch.stack(integrated, dim = -1)
@@ -211,33 +180,6 @@ class ParabolicIntegrate_2d(nn.Module):
             Feature = torch.stack(itemgetter(*self.FeatureIndex)(integrated), dim = -1)
         
         return Feature
-
-        #extract the trees from dictionary which are not purely polyniomials and were not already integrated
-        trees = [tree for tree in tau.keys() if 'I[{}]'.format(tree) not in done and 'I[{}]'.format(tree) not in exceptions] 
-
-        dt, dx = self.T[1]-self.T[0], self.X[1,0]-self.X[0,0]
-        taus = torch.array([tau[t] for t in trees])
-
-        integrated = torch.zeros(shape = (len(trees), len(self.T), self.X.shape[0], self.X.shape[1]))
-        
-        # Finite difference method.
-        # Compute M*(integrated[i-1]+taus[i]). M^T (transpose) and reshaping for the same reason as in Parabolic_many
-        for i in range(1,len(self.T)): 
-            integrated[:,i,:,:] = (integrated[:,i-1,:,:] + self.eps * self.Laplace_2d(integrated[:,i-1,:,:], dx, dt) + taus[:,i-1,:,:] * dt).reshape((len(trees), self.X.shape[0], self.X.shape[1]))
-        
-        Jtau = {}
-        for i, t in enumerate(trees): #update dictionary and return integrated taus.
-            Jtau['I[{}]'.format(t)] = integrated[i]
-            if derivative and "I1[{}]".format(t) not in exceptions and "I2[{}]".format(t) not in exceptions and t[1] == "[":
-                # If derivative is true include also functions of the form \partial_x I[f] that are denoted as I'[f]
-                if derivative == 1 or derivative is True:
-                    Jtau["I1[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 1, flatten = False, higher = False)/dx
-                    Jtau["I2[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 2, flatten = False, higher = False)/dx
-                else:
-                    # centralised differentiation
-                    Jtau["I1[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 1, flatten = False, higher = True)/dx
-                    Jtau["I2[{}]".format(t)] = self.discrete_diff_2d(integrated[i], self.X.shape[0], axis = 2, flatten = False, higher = True)/dx
-        return Jtau
 
     def discrete_diff_2d(self, vec, N, axis, higher = True):
         a = torch.zeros_like(vec)
@@ -324,67 +266,3 @@ class FNO_layer(nn.Module):
             x = F.gelu(x)
             
         return x
-
-# ################################################################
-# #  2d fourier layer
-# ################################################################
-# class SpectralConv2d(nn.Module):
-#     def __init__(self, in_channels, out_channels, modes1, modes2):
-#         super(SpectralConv2d, self).__init__()
-
-#         """
-#         2D Fourier layer. It does FFT, linear transform, and Inverse FFT.    
-#         """
-
-#         self.in_channels = in_channels
-#         self.out_channels = out_channels
-#         self.modes1 = modes1 #Number of Fourier modes to multiply, at most floor(N/2) + 1
-#         self.modes2 = modes2
-
-#         self.scale = (1 / (in_channels * out_channels))
-#         self.weights1 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, dtype=torch.cfloat))
-#         self.weights2 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, dtype=torch.cfloat))
-
-#     # Complex multiplication
-#     def compl_mul2d(self, input, weights):
-#         # (batch, in_channel, x,y ), (in_channel, out_channel, x,y) -> (batch, out_channel, x,y)
-#         return torch.einsum("bixy,ioxy->boxy", input, weights)
-
-#     def forward(self, x):
-#         batchsize = x.shape[0]
-#         #Compute Fourier coeffcients up to factor of e^(- something constant)
-#         x_ft = torch.fft.rfft2(x)
-
-#         # Multiply relevant Fourier modes
-#         out_ft = torch.zeros(batchsize, self.out_channels,  x.size(-2), x.size(-1)//2 + 1, dtype=torch.cfloat, device=x.device)
-#         out_ft[:, :, :self.modes1, :self.modes2] = \
-#             self.compl_mul2d(x_ft[:, :, :self.modes1, :self.modes2], self.weights1)
-#         out_ft[:, :, -self.modes1:, :self.modes2] = \
-#             self.compl_mul2d(x_ft[:, :, -self.modes1:, :self.modes2], self.weights2)
-
-#         #Return to physical space
-#         x = torch.fft.irfft2(out_ft, s=(x.size(-2), x.size(-1)))
-#         return x
-
-# class FNO_layer(nn.Module):
-#     def __init__(self, modes1, modes2, width, last=False):
-#         super(FNO_layer, self).__init__()
-#         """ ...
-#         """
-#         self.last = last
-
-#         self.conv = SpectralConv2d(width, width, modes1, modes2)
-#         self.w = nn.Conv2d(width, width, 1)
-#         # self.bn = torch.nn.BatchNorm2d(width)
-
-
-#     def forward(self, x):
-#         """ x: (batch, hidden_channels, dim_x, dim_t)"""
-
-#         x1 = self.conv(x)
-#         x2 = self.w(x)
-#         x = x1 + x2
-#         if not self.last:
-#             x = F.gelu(x)
-            
-#         return x

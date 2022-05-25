@@ -171,30 +171,6 @@ class rsnet_2d(nn.Module):
         return R1.squeeze() # [B, T, X, Y]
 
 
-# if __name__ == '__main__':
-#     data = dict(np.load(f"./data/NS_{'xi' if args.fixU0 else 'u0_xi'}_{int(args.N*1.2)}_{args.T:g}.npz"))
-#     # Solution = Soln, W = forcing, T = time.numpy(), X = X, Y = Y, U0 = IC
-#     data['T'] = data['T'][::args.sub_t]
-#     data['X'] = data['X'][::args.sub_x,::args.sub_x]
-#     data['Y'] = data['Y'][::args.sub_x,::args.sub_x]
-#     data['W'] = data['W'][:,::args.sub_t,::args.sub_x,::args.sub_x]
-#     data['U0'] = data['U0'][:,::args.sub_x,::args.sub_x]
-#     data['Solution'] = data['Solution'][:,::args.sub_t,::args.sub_x,::args.sub_x]
-#     print(data['Solution'].mean())
-#     saveplot(data['Solution'][2:], data['Solution'][3:], 0)
-
-#     train_W,  test_W,  \
-#     train_U0, test_U0, \
-#     train_Y,  test_Y = train_test_split(data['W'],
-#                                         data['U0'],
-#                                         data['Solution'],
-#                                         train_size=args.N, 
-#                                         shuffle=False)
-
-#     print(f"train_W: {train_W.shape}, train_U0: {train_U0.shape}, train_Y: {train_Y.shape}")
-#     print(f"test_W: {test_W.shape}, test_U0: {test_U0.shape}, test_Y: {test_Y.shape}")
-#     print(f"data['T']: {data['T'].shape}, data['X']: {data['X'].shape}, data['Y']: {data['Y'].shape}")
-    # exit(0)
 def dataloader_2d(u, xi=None, ntrain=1000, ntest=200, T=51, sub_t=1, sub_x=4):
 
     if xi is None:
@@ -216,8 +192,6 @@ def dataloader_2d(u, xi=None, ntrain=1000, ntest=200, T=51, sub_t=1, sub_x=4):
     else:
         xi_test = torch.zeros_like(u_test)
 
-    from scipy import interpolate
-    
     return (xi_train.transpose(0,3,1,2), xi_test.transpose(0,3,1,2),
             u0_train, u0_test,
             u_train.transpose(0,3,1,2), u_test.transpose(0,3,1,2))

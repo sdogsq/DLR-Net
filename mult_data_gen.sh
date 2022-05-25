@@ -1,4 +1,4 @@
-echo "Generate Phi41 Datasets..."
+echo "Generate MULTIPLICATIVE FORCING Datasets..."
 for N in 1000 10000
 do
     for k in 0.0 0.1
@@ -8,7 +8,7 @@ do
             echo "$FILE exists."
         else
             echo "Generating $FILE..."
-            python multiplicative_data.py -N $N -k $k
+            python mult_data.py -N $N -k $k
             echo "$FILE Generated."
         fi
     done

@@ -19,8 +19,6 @@ parser.add_argument('-N', '--N', type=int, default=1000, metavar='N',
                     help = 'number of training realizations')
 parser.add_argument('-k', '--k', type=float, default=0.1, metavar='N',
                     help = 'parameter k in U0')
-parser.add_argument('-U', '--Nuse', type=int, default=None, metavar='N',
-                    help = 'number of training realizations')                    
 parser.add_argument('--batch_size', type=int, default=32, metavar='N',
                     help='input batch size for training (default: 32)')
 parser.add_argument('--epochs', type=int, default=500, metavar='N',
@@ -35,20 +33,15 @@ parser.add_argument('--nlog', type=int, default=5, metavar='N',
                     help='frequency of log printing (default: 5)')
 args = parser.parse_args()
 
-# set training data size
-if args.Nuse is None:
-    args.Nuse = args.N
-if args.Nuse > args.N:
-    raise Exception("Required numbers of data are too large.")
-
 def parabolic_graph(data):
     # create rule with additive width 3
     R = Rule(kernel_deg = 2, noise_deg = -1.5, free_num = 3) 
-
+    # add multiplicative width = 1
+    R.add_component(1, {'xi':1}) 
     # initialize integration map I
     I = SPDE(BC = 'P', T = data['T'], X = data['X']).Integrate_Parabolic_trees 
 
-    G = Graph(integration = I, rule = R, height = args.height, deg = 7.5) # initialize graph
+    G = Graph(integration = I, rule = R, height = args.height, deg = 5) # initialize graph
 
     extra_deg = 2
     key = "I_c[u_0]"
@@ -68,18 +61,13 @@ class rsnet(nn.Module):
         self.X = len(X)
         self.RSLayer0 = ParabolicIntegrate(graph, T = T, X = X)
         self.down0 = nn.Sequential(
-            nn.Linear( self.F, 32),
+            nn.Linear(self.F, 32),
             nn.GELU(),
             nn.Linear(32, 1)
         )
-        # self.down1 = nn.Sequential(
-        #     nn.Conv1d(self.T * self.F, 32 * self.T, kernel_size=1, groups = self.T),
-        #     nn.GELU(),
-        #     nn.Conv1d(32 * self.T, self.T, kernel_size = 1, groups = self.T)
-        # )
         self.L = 4
         self.padding = 6 
-        modes1, modes2, width = 16, 16, 8 #32, 24, 32
+        modes1, modes2, width = 16, 16, 8
         self.net = [FNO_layer(modes1, modes2, width) for i in range(self.L-1)]
         self.net += [FNO_layer(modes1, modes2, width, last=True)]
         self.net = nn.Sequential(*self.net)
@@ -109,9 +97,7 @@ class rsnet(nn.Module):
         R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi) # [B, T, N, F + 1]
 
         O1 = R1[..., 1:] # [B, T, N, F],  drop Xi
-        # U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
-        U0 = self.down0(O1).squeeze(3) # [B, T, N]
-        # U0 = self.down1(O1.permute(0, 2, 1, 3).reshape(-1, self.T * self.F, 1)).reshape(-1,self.T, self.X) # [B, T, N]
+        U0 = self.down0(O1).squeeze() # [B, T, N]
         R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnU0Feature = True)
 
         R1 = torch.cat((O1, R1), dim = 3) # [B,T,N, F + FU0]
@@ -152,20 +138,27 @@ def test(model, device, test_loader, criterion):
     return test_loss / len(test_loader.dataset)
 
 if __name__ == '__main__':
-    data = np.load(f"./data/parabolic_additive_{args.N}_{args.k}.npz")
+    data = np.load(f"./data/parabolic_multiplicative_{args.N}_{args.k}.npz")
     train_W, test_W, train_U0, test_U0, train_Y, test_Y = train_test_split(data['W'],
                                                                            data['U0'],
-                                                                           data['Soln_add'],
-                                                                           train_size=args.Nuse,
-                                                                           test_size = int(args.Nuse * 0.2),
+                                                                           data['Solution'],
+                                                                           train_size=args.N, 
                                                                            shuffle=False)
+    val_W, test_W, val_U0, test_U0, val_Y, test_Y = train_test_split(test_W,
+                                                                     test_U0,
+                                                                     test_Y,
+                                                                     train_size=0.5,
+                                                                     shuffle=False)
 
     print(f"train_W: {train_W.shape}, train_U0: {train_U0.shape}, train_Y: {train_Y.shape}")
+    print(f"val_W: {val_W.shape}, val_U0: {val_U0.shape}, val_Y: {val_Y.shape}")
     print(f"test_W: {test_W.shape}, test_U0: {test_U0.shape}, test_Y: {test_Y.shape}")
+
     graph = parabolic_graph(data)
     print(graph)
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     train_W, train_U0, train_Y = torch.Tensor(train_W), torch.Tensor(train_U0), torch.Tensor(train_Y)
+    val_W, val_U0, val_Y = torch.Tensor(val_W), torch.Tensor(val_U0), torch.Tensor(val_Y)
     test_W, test_U0, test_Y = torch.Tensor(test_W), torch.Tensor(test_U0), torch.Tensor(test_Y)
 
     # cache Xi fatures
@@ -180,10 +173,10 @@ if __name__ == '__main__':
                               drop_last=True,
                               num_workers=4)
 
-    test_F_Xi = cacheXiFeature(graph, T = data['T'], X = data['X'], W = test_W, device = device)
+    val_F_Xi = cacheXiFeature(graph, T = data['T'], X = data['X'], W = val_W, device = device)
 
-    testset = TensorDataset(test_W, test_U0, test_F_Xi, test_Y)
-    test_loader = DataLoader(testset,
+    valset = TensorDataset(val_W, val_U0, val_F_Xi, val_Y)
+    val_loader = DataLoader(valset,
                              batch_size=100,
                              shuffle=True,
                              pin_memory=True,
@@ -217,9 +210,26 @@ if __name__ == '__main__':
         scheduler.step()
 
         if (epoch-1) % args.nlog == 0:
-            testLoss = test(model, device, test_loader, lossfn)
+            testLoss = test(model, device, val_loader, lossfn)
 
-            wandb.log({"Train Loss": trainLoss, "Test Loss": testLoss})
-            print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \t\
+            wandb.log({"Train Loss": trainLoss, "Val Loss": testLoss})
+            print('Epoch: {:04d} \tTrain Loss: {:.6f} \tVal Loss: {:.6f} \t\
                    Training Time per Epoch: {:.3f} \t'\
                    .format(epoch, trainLoss, testLoss, trainTime / epoch))
+
+    ## ----------- test ------------
+
+    test_F_Xi = cacheXiFeature(graph, T = data['T'], X = data['X'], W = test_W, device = device)
+
+    testset = TensorDataset(test_W, test_U0, test_F_Xi, test_Y)
+    test_loader = DataLoader(testset,
+                             batch_size=100,
+                             shuffle=True,
+                             pin_memory=True,
+                             persistent_workers=True,
+                             drop_last=False,
+                             num_workers=4)
+
+    testLoss = test(model, device, test_loader, lossfn)
+    wandb.log({"Test Loss": testLoss})
+    print(f'Final Test Loss: {testLoss:.6f}')
