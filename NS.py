@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
-import wandb
 from src.Rule import Rule
 from src.SPDEs import SPDE
 from src.Graph import Graph
@@ -263,7 +262,6 @@ if __name__ == '__main__':
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, verbose = False)
     #torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.5)
 
-    wandb.init(project="DeepRS", entity="sdogsq", config=args)
 
     trainTime = 0
     for epoch in range(1, args.epochs + 1):
@@ -276,7 +274,6 @@ if __name__ == '__main__':
         if (epoch-1) % args.nlog == 0:
             testLoss = test(model, device, test_loader, lossfn, epoch)
 
-            wandb.log({"Train Loss": trainLoss, "Test Loss": testLoss})
             print('Epoch: {:04d} \tTrain Loss: {:.6f} \tTest Loss: {:.6f} \t\
                    Training Time per Epoch: {:.3f} \t'\
                    .format(epoch, trainLoss, testLoss, trainTime / epoch))
@@ -285,4 +282,3 @@ if __name__ == '__main__':
     mkdir("./save/")
     savePath = f"./save/NS_{'xi' if args.fixU0 else 'u0_xi'}_{args}.pt"
     torch.save(model.state_dict(), savePath)
-    wandb.save(savePath)

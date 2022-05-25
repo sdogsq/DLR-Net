@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
-import wandb
+
 from src.Rule import Rule
 from src.SPDEs import SPDE
 from src.Graph import Graph
@@ -109,9 +109,7 @@ class rsnet(nn.Module):
         R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi) # [B, T, N, F + 1]
 
         O1 = R1[..., 1:] # [B, T, N, F],  drop Xi
-        # U0 = self.down0(torch.cat((U0.unsqueeze(2), O1[:,-1,:,:]), dim = 2)).squeeze() # [B, N]
         U0 = self.down0(O1).squeeze(3) # [B, T, N]
-        # U0 = self.down1(O1.permute(0, 2, 1, 3).reshape(-1, self.T * self.F, 1)).reshape(-1,self.T, self.X) # [B, T, N]
         R1 = self.RSLayer0(W = W, Latent = U0, XiFeature = Feature_Xi, returnU0Feature = True)
 
         R1 = torch.cat((O1, R1), dim = 3) # [B,T,N, F + FU0]
@@ -212,8 +210,6 @@ if __name__ == '__main__':
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, verbose = False)
     #torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.5)
 
-    wandb.init(project="DeepRS", entity="sdogsq", config=args)
-
     trainTime = 0
     for epoch in range(1, args.epochs + 1):
         tik = time.time()
@@ -225,7 +221,6 @@ if __name__ == '__main__':
         if (epoch-1) % args.nlog == 0:
             testLoss = test(model, device, val_loader, lossfn)
 
-            wandb.log({"Train Loss": trainLoss, "Val Loss": testLoss})
             print('Epoch: {:04d} \tTrain Loss: {:.6f} \tVal Loss: {:.6f} \t\
                    Training Time per Epoch: {:.3f} \t'\
                    .format(epoch, trainLoss, testLoss, trainTime / epoch))
@@ -244,5 +239,4 @@ if __name__ == '__main__':
                              num_workers=4)
 
     testLoss = test(model, device, test_loader, lossfn)
-    wandb.log({"Test Loss": testLoss})
     print(f'Final Test Loss: {testLoss:.6f}')
